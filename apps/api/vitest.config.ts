@@ -28,9 +28,17 @@ export default defineConfig({
         // applyOrgScope() extraction, this file is constructor + NestJS
         // lifecycle hooks + a thin $extends() delegation. The substantive
         // logic lives in org-scope.ts (100% covered). End-to-end behavior
-        // (does scoped() actually inject orgId at runtime?) lands as an
-        // integration test when T1 brings up a real DB in CI.
+        // (does scoped() actually inject orgId at runtime?) is verified by
+        // contact-upsert.integration.spec.ts (T1+ uses scoped() against a
+        // live DB).
         'src/common/prisma/prisma.service.ts',
+        // Prisma transaction orchestration around two extracted pure
+        // functions: normalizeEmail (identity.ts, 100%) and
+        // resolveFieldUpdates (field-resolver.ts, 100%). What remains is
+        // pg_advisory_xact_lock + find-or-create + ContactSource upsert
+        // wiring — only meaningfully testable against a live Postgres.
+        // Covered by 12 integration tests in contact-upsert.integration.spec.ts.
+        'src/modules/contacts/contact-upsert.ts',
       ],
       thresholds: {
         // CLAUDE.md: 95%+ line coverage on logic files.

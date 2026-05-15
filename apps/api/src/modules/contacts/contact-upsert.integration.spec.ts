@@ -107,6 +107,7 @@ describe.skipIf(!DATABASE_URL)(
         orgId: orgA,
         emailRaw: 'sarah@acme.com',
         sourceAccountId: hubspotA,
+        sourceKind: 'hubspot',
         externalId: 'hs_001',
         externalUrl: 'https://app.hubspot.com/contacts/123/contact/hs_001',
         fields: { firstName: 'Sarah', title: 'VP Eng', company: 'Acme' },
@@ -142,6 +143,7 @@ describe.skipIf(!DATABASE_URL)(
         orgId: orgA,
         emailRaw: 'sarah@acme.com',
         sourceAccountId: hubspotA,
+        sourceKind: 'hubspot',
         externalId: 'hs_001',
         fields: { title: 'VP Eng' },
         rawPayload: { source: 'hubspot' },
@@ -151,6 +153,7 @@ describe.skipIf(!DATABASE_URL)(
         orgId: orgA,
         emailRaw: 'sarah@acme.com',
         sourceAccountId: apolloA,
+        sourceKind: 'apollo',
         externalId: 'apo_xyz',
         fields: { title: 'Head of Engineering' },
         rawPayload: { source: 'apollo' },
@@ -179,6 +182,7 @@ describe.skipIf(!DATABASE_URL)(
         orgId: orgA,
         emailRaw: 'sarah@acme.com',
         sourceAccountId: hubspotA,
+        sourceKind: 'hubspot',
         externalId: 'hs_001',
         rawPayload: { source: 'hubspot', v: 1 },
       });
@@ -187,6 +191,7 @@ describe.skipIf(!DATABASE_URL)(
         orgId: orgA,
         emailRaw: 'sarah@acme.com',
         sourceAccountId: hubspotA,
+        sourceKind: 'hubspot',
         externalId: 'hs_001',
         rawPayload: { source: 'hubspot', v: 2 },
       });
@@ -208,6 +213,7 @@ describe.skipIf(!DATABASE_URL)(
           orgId: orgA,
           emailRaw: 'sarah@acme.com',
           sourceAccountId: hubspotA,
+          sourceKind: 'hubspot',
           externalId: `hs_${i}`,
           rawPayload: { i },
         }),
@@ -244,6 +250,7 @@ describe.skipIf(!DATABASE_URL)(
           orgId: orgA,
           emailRaw: 'not-an-email',
           sourceAccountId: hubspotA,
+          sourceKind: 'hubspot',
           externalId: 'hs_x',
           rawPayload: {},
         }),
@@ -260,6 +267,7 @@ describe.skipIf(!DATABASE_URL)(
         orgId: orgA,
         emailRaw: 'sarah@acme.com',
         sourceAccountId: hubspotA,
+        sourceKind: 'hubspot',
         externalId: 'hs_001',
         rawPayload: {},
       });
@@ -268,6 +276,7 @@ describe.skipIf(!DATABASE_URL)(
         orgId: orgA,
         emailRaw: 'Sarah+Work@Acme.COM',
         sourceAccountId: apolloA,
+        sourceKind: 'apollo',
         externalId: 'apo_xyz',
         rawPayload: {},
       });
@@ -282,6 +291,7 @@ describe.skipIf(!DATABASE_URL)(
         orgId: orgA,
         emailRaw: 'sarah@acme.com',
         sourceAccountId: hubspotA,
+        sourceKind: 'hubspot',
         externalId: 'hs_001',
         rawPayload: {},
       });
@@ -290,6 +300,7 @@ describe.skipIf(!DATABASE_URL)(
         orgId: orgB,
         emailRaw: 'sarah@acme.com',
         sourceAccountId: hubspotB,
+        sourceKind: 'hubspot',
         externalId: 'hs_001',
         rawPayload: {},
       });
@@ -304,6 +315,7 @@ describe.skipIf(!DATABASE_URL)(
         orgId: orgA,
         emailRaw: 'sarah@acme.com',
         sourceAccountId: hubspotA,
+        sourceKind: 'hubspot',
         externalId: 'hs_001',
         rawPayload: {},
       });
@@ -312,6 +324,7 @@ describe.skipIf(!DATABASE_URL)(
         orgId: orgA,
         emailRaw: 'sarah@mail.acme.com',
         sourceAccountId: hubspotA,
+        sourceKind: 'hubspot',
         externalId: 'hs_002',
         rawPayload: {},
       });
@@ -320,6 +333,126 @@ describe.skipIf(!DATABASE_URL)(
 
       const contacts = await prisma.contact.findMany({ where: { orgId: orgA } });
       expect(contacts).toHaveLength(2);
+    });
+
+    // ─── T4: per-field precedence (D3 + codex T4 hardening) ──────────────
+
+    it('T4: HubSpot title persists when Apollo sync arrives later (lower tier blocked)', async () => {
+      const r1 = await upsertContact(prisma, {
+        orgId: orgA,
+        emailRaw: 'sarah@acme.com',
+        sourceAccountId: hubspotA,
+        sourceKind: 'hubspot',
+        externalId: 'hs_001',
+        fields: { title: 'VP Eng', company: 'Acme' },
+        rawPayload: { source: 'hubspot' },
+      });
+      expect(r1.contact.title).toBe('VP Eng');
+
+      const r2 = await upsertContact(prisma, {
+        orgId: orgA,
+        emailRaw: 'sarah@acme.com',
+        sourceAccountId: apolloA,
+        sourceKind: 'apollo',
+        externalId: 'apo_xyz',
+        fields: { title: 'Head of Engineering', company: 'Acme Corp' },
+        rawPayload: { source: 'apollo' },
+      });
+
+      // Apollo (tier 25) cannot overwrite HubSpot (tier 50). Both fields stay.
+      expect(r2.contact.title).toBe('VP Eng');
+      expect(r2.contact.company).toBe('Acme');
+    });
+
+    it('T4: Apollo data is overwritten when HubSpot sync arrives later (higher tier wins)', async () => {
+      const r1 = await upsertContact(prisma, {
+        orgId: orgA,
+        emailRaw: 'sarah@acme.com',
+        sourceAccountId: apolloA,
+        sourceKind: 'apollo',
+        externalId: 'apo_xyz',
+        fields: { title: 'Head of Engineering' },
+        rawPayload: { source: 'apollo' },
+      });
+      expect(r1.contact.title).toBe('Head of Engineering');
+
+      const r2 = await upsertContact(prisma, {
+        orgId: orgA,
+        emailRaw: 'sarah@acme.com',
+        sourceAccountId: hubspotA,
+        sourceKind: 'hubspot',
+        externalId: 'hs_001',
+        fields: { title: 'VP Eng' },
+        rawPayload: { source: 'hubspot' },
+      });
+
+      // HubSpot (tier 50) overwrites Apollo (tier 25).
+      expect(r2.contact.title).toBe('VP Eng');
+    });
+
+    it('T4: Apollo cannot null-out a populated HubSpot field', async () => {
+      await upsertContact(prisma, {
+        orgId: orgA,
+        emailRaw: 'sarah@acme.com',
+        sourceAccountId: hubspotA,
+        sourceKind: 'hubspot',
+        externalId: 'hs_001',
+        fields: { title: 'VP Eng' },
+        rawPayload: {},
+      });
+
+      const r2 = await upsertContact(prisma, {
+        orgId: orgA,
+        emailRaw: 'sarah@acme.com',
+        sourceAccountId: apolloA,
+        sourceKind: 'apollo',
+        externalId: 'apo_xyz',
+        fields: { title: null }, // Apollo doesn't know the title
+        rawPayload: {},
+      });
+
+      expect(r2.contact.title).toBe('VP Eng');
+    });
+
+    it('T4: manual provenance entry blocks any vendor sync overwrite', async () => {
+      // Simulate a Contact whose title was manually edited (provenance tier='manual').
+      const r1 = await upsertContact(prisma, {
+        orgId: orgA,
+        emailRaw: 'sarah@acme.com',
+        sourceAccountId: hubspotA,
+        sourceKind: 'hubspot',
+        externalId: 'hs_001',
+        fields: { title: 'VP Eng' },
+        rawPayload: {},
+      });
+
+      // Promote the title's provenance to manual (mimics a user edit endpoint).
+      await prisma.contact.update({
+        where: { id: r1.contact.id },
+        data: {
+          title: 'CEO',
+          fieldProvenance: {
+            title: {
+              source: 'manual',
+              tier: 'manual',
+              updatedAt: new Date().toISOString(),
+            },
+          },
+        },
+      });
+
+      // Now a HubSpot sync tries to overwrite.
+      const r2 = await upsertContact(prisma, {
+        orgId: orgA,
+        emailRaw: 'sarah@acme.com',
+        sourceAccountId: hubspotA,
+        sourceKind: 'hubspot',
+        externalId: 'hs_001',
+        fields: { title: 'VP Eng (vendor)' },
+        rawPayload: {},
+      });
+
+      expect(r2.contact.title).toBe('CEO');
     });
   },
 );
