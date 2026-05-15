@@ -50,6 +50,9 @@ module.exports = {
           '\\.d\\.ts$',
           '(^|/)tsconfig\\.json$',
           '(^|/)(babel|webpack)\\.config\\.(js|cjs|mjs|ts|json)$',
+          '(^|/)vitest\\.config\\.ts$',
+          '(^|/)vitest\\.integration\\.config\\.ts$',
+          '(^|/)vite\\.config\\.ts$',
           'main\\.ts$',
         ],
       },
@@ -58,6 +61,11 @@ module.exports = {
   ],
   options: {
     doNotFollow: { path: 'node_modules' },
+    exclude: {
+      // Build outputs + coverage artifacts. These shouldn't be in the repo but
+      // they do appear locally; depcruise reports them as orphans otherwise.
+      path: '(^|/)(coverage|dist|build|\\.next|\\.turbo)(/|$)',
+    },
     tsPreCompilationDeps: true,
     tsConfig: { fileName: 'tsconfig.base.json' },
     enhancedResolveOptions: {

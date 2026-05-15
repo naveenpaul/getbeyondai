@@ -124,7 +124,7 @@ describe('decryptCredentials — error paths', () => {
 
   it('rejects tampered ciphertext (reason=decrypt_failed)', () => {
     const sealed = encryptCredentials({ k: 'v' }, masterKey);
-    sealed[15] = sealed[15] ^ 0xff; // flip a byte in the ciphertext region
+    sealed[15] = (sealed[15] ?? 0) ^ 0xff; // flip a byte in the ciphertext region
     try {
       decryptCredentials(sealed, masterKey);
       expect.fail('should have thrown');

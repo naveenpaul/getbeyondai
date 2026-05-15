@@ -24,19 +24,21 @@ export class SingleflightRegistry<TKey, TValue> {
     const existing = this.inflight.get(key);
     if (existing) return existing;
 
-    const promise = (async () => {
-      try {
-        return await fn();
-      } finally {
-        // Delete only if our promise is still the one registered.
-        // (Defensive — protects against pathological cases where the registry
-        // gets cleared mid-flight and a different promise is now registered.)
-        if (this.inflight.get(key) === promise) {
-          this.inflight.delete(key);
-        }
-      }
-    })();
+    const promise = fn();
     this.inflight.set(key, promise);
+
+    // Detach on settle. Only clear if our promise is still the registered one
+    // (defensive against pathological cases where clear() ran mid-flight or a
+    // different promise is now registered). Use .then(onFulfilled, onRejected)
+    // rather than .finally so cleanup is structurally separated from the value
+    // chain — and avoid the forward-reference pattern that fails strict typecheck.
+    const cleanup = (): void => {
+      if (this.inflight.get(key) === promise) {
+        this.inflight.delete(key);
+      }
+    };
+    void promise.then(cleanup, cleanup);
+
     return promise;
   }
 

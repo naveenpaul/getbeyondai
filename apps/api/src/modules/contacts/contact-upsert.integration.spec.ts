@@ -125,17 +125,17 @@ describe.skipIf(!DATABASE_URL)(
         where: { contactId: result.contact.id },
       });
       expect(emails).toHaveLength(1);
-      expect(emails[0].isPrimary).toBe(true);
-      expect(emails[0].normalizedEmail).toBe('sarah@acme.com');
-      expect(emails[0].rawEmail).toBe('sarah@acme.com');
+      expect(emails[0]!.isPrimary).toBe(true);
+      expect(emails[0]!.normalizedEmail).toBe('sarah@acme.com');
+      expect(emails[0]!.rawEmail).toBe('sarah@acme.com');
 
       const sources = await prisma.contactSource.findMany({
         where: { contactId: result.contact.id },
       });
       expect(sources).toHaveLength(1);
-      expect(sources[0].sourceAccountId).toBe(hubspotA);
-      expect(sources[0].externalId).toBe('hs_001');
-      expect(sources[0].rawPayloadVersion).toBe(1);
+      expect(sources[0]!.sourceAccountId).toBe(hubspotA);
+      expect(sources[0]!.externalId).toBe('hs_001');
+      expect(sources[0]!.rawPayloadVersion).toBe(1);
     });
 
     it('same email second source → one Contact, two ContactSource (the moat)', async () => {
@@ -203,8 +203,8 @@ describe.skipIf(!DATABASE_URL)(
         where: { contactId: r2.contact.id },
       });
       expect(sources).toHaveLength(1);
-      expect(sources[0].rawPayloadVersion).toBe(2);
-      expect(sources[0].rawPayload).toEqual({ source: 'hubspot', v: 2 });
+      expect(sources[0]!.rawPayloadVersion).toBe(2);
+      expect(sources[0]!.rawPayload).toEqual({ source: 'hubspot', v: 2 });
     });
 
     it('REGRESSION-IF-BROKEN: 10 concurrent upserts → one Contact, advisory lock holds', async () => {
@@ -229,13 +229,13 @@ describe.skipIf(!DATABASE_URL)(
       const contacts = await prisma.contact.findMany({ where: { orgId: orgA } });
       expect(contacts).toHaveLength(1);
       const emails = await prisma.contactEmail.findMany({
-        where: { contactId: contacts[0].id },
+        where: { contactId: contacts[0]!.id },
       });
       expect(emails).toHaveLength(1);
 
       // 10 ContactSource rows (different externalIds).
       const sources = await prisma.contactSource.findMany({
-        where: { contactId: contacts[0].id },
+        where: { contactId: contacts[0]!.id },
       });
       expect(sources).toHaveLength(10);
 

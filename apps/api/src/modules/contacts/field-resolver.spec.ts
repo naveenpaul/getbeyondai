@@ -69,7 +69,7 @@ describe('resolveFieldUpdates — tier precedence', () => {
     });
 
     expect(result.updates).toEqual({ title: 'VP Eng' });
-    expect(result.provenance.title.tier).toBe('hubspot');
+    expect(result.provenance.title!.tier).toBe('hubspot');
   });
 
   it('lower-tier incoming is SKIPPED when existing is higher (HubSpot → Apollo loses)', () => {
@@ -84,8 +84,8 @@ describe('resolveFieldUpdates — tier precedence', () => {
 
     expect(result.updates).toEqual({});
     // Provenance unchanged.
-    expect(result.provenance.title.tier).toBe('hubspot');
-    expect(result.provenance.title.updatedAt).toBe(T0.toISOString());
+    expect(result.provenance.title!.tier).toBe('hubspot');
+    expect(result.provenance.title!.updatedAt).toBe(T0.toISOString());
   });
 
   it('manual edits are sticky against all vendor sources', () => {
@@ -99,7 +99,7 @@ describe('resolveFieldUpdates — tier precedence', () => {
         source: { accountId: 'acc_x', tier, now: T2 },
       });
       expect(result.updates).toEqual({});
-      expect(result.provenance.title.source).toBe('manual');
+      expect(result.provenance.title!.source).toBe('manual');
     }
   });
 });
@@ -116,7 +116,7 @@ describe('resolveFieldUpdates — same-tier last-write-wins', () => {
     });
 
     expect(result.updates).toEqual({ title: 'Updated Title' });
-    expect(result.provenance.title.updatedAt).toBe(T1.toISOString());
+    expect(result.provenance.title!.updatedAt).toBe(T1.toISOString());
   });
 
   it('older or equal-time same-tier update is skipped (stale data does not flap)', () => {
@@ -130,7 +130,7 @@ describe('resolveFieldUpdates — same-tier last-write-wins', () => {
     });
 
     expect(result.updates).toEqual({});
-    expect(result.provenance.title.updatedAt).toBe(T2.toISOString());
+    expect(result.provenance.title!.updatedAt).toBe(T2.toISOString());
   });
 
   it('cross-source same-tier last-write-wins (HubSpot then Salesforce, same tier)', () => {
@@ -144,8 +144,8 @@ describe('resolveFieldUpdates — same-tier last-write-wins', () => {
     });
 
     expect(result.updates).toEqual({ title: 'Salesforce Says' });
-    expect(result.provenance.title.source).toBe('acc_sf');
-    expect(result.provenance.title.tier).toBe('salesforce');
+    expect(result.provenance.title!.source).toBe('acc_sf');
+    expect(result.provenance.title!.tier).toBe('salesforce');
   });
 });
 
@@ -161,7 +161,7 @@ describe('resolveFieldUpdates — empty / null guards', () => {
     });
 
     expect(result.updates).toEqual({});
-    expect(result.provenance.title.updatedAt).toBe(T0.toISOString());
+    expect(result.provenance.title!.updatedAt).toBe(T0.toISOString());
   });
 
   it('skips empty-string incoming values', () => {
@@ -221,9 +221,9 @@ describe('resolveFieldUpdates — multi-field mixed outcomes', () => {
       company: 'HubSpot Says Beats Apollo',
       linkedinUrl: 'https://linkedin.com/in/sarah-new',
     });
-    expect(result.provenance.title.source).toBe('manual');
-    expect(result.provenance.company.tier).toBe('hubspot');
-    expect(result.provenance.linkedinUrl.tier).toBe('hubspot');
+    expect(result.provenance.title!.source).toBe('manual');
+    expect(result.provenance.company!.tier).toBe('hubspot');
+    expect(result.provenance.linkedinUrl!.tier).toBe('hubspot');
   });
 });
 
@@ -252,7 +252,7 @@ describe('resolveFieldUpdates — purity', () => {
     });
     const after = Date.now();
 
-    const recorded = new Date(result.provenance.title.updatedAt).getTime();
+    const recorded = new Date(result.provenance.title!.updatedAt).getTime();
     expect(recorded).toBeGreaterThanOrEqual(before);
     expect(recorded).toBeLessThanOrEqual(after);
   });
