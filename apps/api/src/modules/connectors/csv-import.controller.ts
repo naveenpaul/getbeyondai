@@ -2,18 +2,28 @@ import {
   BadRequestException,
   Controller,
   ForbiddenException,
+  Get,
+  HttpCode,
   Inject,
   NotFoundException,
+  Param,
+  PayloadTooLargeException,
   Post,
+  Query,
   Req,
 } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { runCsvImport } from './csv-import.service';
+import { QueueService } from '../queue/queue.service';
+import {
+  CSV_IMPORT_QUEUE,
+  type CsvImportJobPayload,
+} from './csv-import.worker';
 import {
   CsvImportMetadataSchema,
+  type CsvImportEnqueueResponse,
   type CsvImportMetadata,
-  type CsvImportResponse,
+  type CsvSyncRunStatusResponse,
   CSV_IMPORT_ERROR_RESPONSE_CAP,
 } from './csv-import.dto';
 
@@ -25,26 +35,33 @@ interface ParsedMultipart {
 @Controller('connectors/csv')
 export class CsvImportController {
   private readonly prisma: PrismaService;
+  private readonly queue: QueueService;
 
-  // Explicit @Inject + manual assignment instead of parameter-property syntax.
-  // vitest uses esbuild which does NOT emit `design:paramtypes` decorator
-  // metadata (only tsc with `emitDecoratorMetadata: true` does). NestJS DI
-  // relies on that metadata to resolve constructor-injected services from
-  // the parameter type. Without it, `private readonly prisma: PrismaService`
-  // injects `undefined` in the test run. The explicit @Inject(PrismaService)
-  // makes the dependency resolvable in both tsc-built and esbuild-transformed
-  // execution paths.
-  constructor(@Inject(PrismaService) prisma: PrismaService) {
+  // Explicit @Inject + manual assignment — see CLAUDE.md "NestJS dependency
+  // injection — pitfall" for why parameter-property syntax breaks under
+  // vitest+esbuild.
+  constructor(
+    @Inject(PrismaService) prisma: PrismaService,
+    @Inject(QueueService) queue: QueueService,
+  ) {
     this.prisma = prisma;
+    this.queue = queue;
   }
 
+  /**
+   * Enqueue a CSV import job. Returns 202 + SyncRun id. Caller polls
+   * GET /connectors/csv/sync-runs/:id for terminal status.
+   *
+   * v1 phase 2 (T8-CSV.2c.2): CSV bytes travel inline as base64 inside the
+   * pg-boss job payload. Hard-capped at 5 MB by the multipart limit in
+   * main.ts. The next slice (T8-CSV.2c.3) routes >5 MB files through
+   * object storage and lifts the cap.
+   */
   @Post('import')
-  async import(@Req() req: FastifyRequest): Promise<CsvImportResponse> {
+  @HttpCode(202)
+  async import(@Req() req: FastifyRequest): Promise<CsvImportEnqueueResponse> {
     const { fileBuffer, metadata } = await parseMultipart(req);
 
-    // Validate the ConnectorAccount exists, is owned by the claimed org,
-    // and is the right kind. The orgId-mismatch case is the load-bearing
-    // tenant-isolation check until real auth replaces the body-based orgId.
     const account = await this.prisma.connectorAccount.findUnique({
       where: { id: metadata.sourceAccountId },
     });
@@ -54,9 +71,6 @@ export class CsvImportController {
       );
     }
     if (account.orgId !== metadata.orgId) {
-      // 403 not 404 — telling the caller "wrong org" leaks ConnectorAccount
-      // existence across tenants. 403 still distinguishes from 404, but the
-      // upstream observation is "you don't own this resource".
       throw new ForbiddenException('ConnectorAccount belongs to another org');
     }
     if (account.kind !== 'csv') {
@@ -65,33 +79,83 @@ export class CsvImportController {
       );
     }
 
-    const result = await runCsvImport(this.prisma, {
+    // Producer side: create the SyncRun synchronously so we can return its
+    // id, then hand the file off to the worker queue.
+    const syncRun = await this.prisma.syncRun.create({
+      data: {
+        orgId: metadata.orgId,
+        connectorAccountId: metadata.sourceAccountId,
+        direction: 'pull',
+        status: 'running',
+      },
+    });
+
+    await this.queue.send<CsvImportJobPayload>(CSV_IMPORT_QUEUE, {
+      syncRunId: syncRun.id,
       orgId: metadata.orgId,
       sourceAccountId: metadata.sourceAccountId,
-      csv: { kind: 'buffer', content: fileBuffer },
+      csvBase64: fileBuffer.toString('base64'),
       columnMapping: metadata.columnMapping,
       triggeredBy: metadata.triggeredBy,
     });
 
+    return { syncRunId: syncRun.id, status: 'running' };
+  }
+
+  /**
+   * Poll SyncRun status. Returns 200 + the current state regardless of
+   * whether the worker has finished (callers can poll until status ≠ 'running').
+   *
+   * Tenant guards: same as the upload endpoint — orgId is the load-bearing
+   * isolation check until real auth lands. Pre-auth stub passes it via
+   * `?orgId=` query param; real auth will pull it from OrgContext.
+   */
+  @Get('sync-runs/:id')
+  async getSyncRun(
+    @Param('id') id: string,
+    @Query('orgId') orgId: string | undefined,
+  ): Promise<CsvSyncRunStatusResponse> {
+    if (!orgId) {
+      throw new BadRequestException('orgId query parameter is required');
+    }
+    const syncRun = await this.prisma.syncRun.findUnique({ where: { id } });
+    if (!syncRun) {
+      throw new NotFoundException(`SyncRun ${id} not found`);
+    }
+    if (syncRun.orgId !== orgId) {
+      throw new ForbiddenException('SyncRun belongs to another org');
+    }
+
+    const rawErrors = Array.isArray(syncRun.errors) ? syncRun.errors : [];
+    const errors = rawErrors
+      .slice(0, CSV_IMPORT_ERROR_RESPONSE_CAP)
+      .map((e: unknown) => {
+        if (typeof e === 'object' && e !== null) {
+          const obj = e as {
+            row?: unknown;
+            reason?: unknown;
+            message?: unknown;
+          };
+          return {
+            row: typeof obj.row === 'number' ? obj.row : -1,
+            reason: typeof obj.reason === 'string' ? obj.reason : 'unknown',
+            message: typeof obj.message === 'string' ? obj.message : '',
+          };
+        }
+        return { row: -1, reason: 'unknown', message: '' };
+      });
+
     return {
-      syncRunId: result.syncRun.id,
-      status: result.syncRun.status as 'completed' | 'failed',
-      recordsIn: result.recordsIn,
-      recordsOut: result.recordsOut,
-      errorCount: result.errorCount,
-      errors: result.errors
-        .slice(0, CSV_IMPORT_ERROR_RESPONSE_CAP)
-        .map((e) => ({ row: e.row, reason: e.reason, message: e.message })),
+      syncRunId: syncRun.id,
+      status: syncRun.status as 'running' | 'completed' | 'failed',
+      recordsIn: syncRun.recordsIn,
+      recordsOut: syncRun.recordsOut,
+      errorCount: syncRun.errorCount,
+      errors,
     };
   }
 }
 
-/**
- * Pull the file + metadata fields out of a multipart request.
- *
- * Exported via `parseMultipart` (named export below) so the parsing logic
- * is testable without a live Fastify app.
- */
 async function parseMultipart(req: FastifyRequest): Promise<ParsedMultipart> {
   if (!req.isMultipart()) {
     throw new BadRequestException(
@@ -111,8 +175,9 @@ async function parseMultipart(req: FastifyRequest): Promise<ParsedMultipart> {
         }
         fileBuffer = Buffer.concat(chunks);
         if (part.file.truncated) {
-          throw new BadRequestException(
-            'CSV file exceeds the configured upload size limit',
+          throw new PayloadTooLargeException(
+            'CSV file exceeds the 5 MB inline-base64 cap. ' +
+              'Larger uploads route through object storage in a follow-up release.',
           );
         }
       } else {
@@ -140,7 +205,9 @@ async function parseMultipart(req: FastifyRequest): Promise<ParsedMultipart> {
   try {
     metadataParsed = JSON.parse(metadataRaw);
   } catch {
-    throw new BadRequestException('multipart field "metadata" must be valid JSON');
+    throw new BadRequestException(
+      'multipart field "metadata" must be valid JSON',
+    );
   }
 
   const result = CsvImportMetadataSchema.safeParse(metadataParsed);

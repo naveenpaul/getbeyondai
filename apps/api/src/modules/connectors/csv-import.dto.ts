@@ -28,12 +28,22 @@ export const CsvImportMetadataSchema = z.object({
 export type CsvImportMetadata = z.infer<typeof CsvImportMetadataSchema>;
 
 /**
- * Response payload returned by POST /connectors/csv/import.
- * Errors array is capped (caller fetches the full list via /sync-runs/:id).
+ * Response returned immediately after a successful enqueue. 202 Accepted.
+ * Caller polls GET /connectors/csv/sync-runs/:id for terminal status.
  */
-export interface CsvImportResponse {
+export interface CsvImportEnqueueResponse {
   syncRunId: string;
-  status: 'completed' | 'failed';
+  /** Always 'running' at this point — the worker will drive it terminal. */
+  status: 'running';
+}
+
+/**
+ * Response from GET /connectors/csv/sync-runs/:id.
+ * Errors array is capped at CSV_IMPORT_ERROR_RESPONSE_CAP entries.
+ */
+export interface CsvSyncRunStatusResponse {
+  syncRunId: string;
+  status: 'running' | 'completed' | 'failed';
   recordsIn: number;
   recordsOut: number;
   errorCount: number;
@@ -44,5 +54,5 @@ export interface CsvImportResponse {
   }>;
 }
 
-/** Cap on errors[] length in the immediate HTTP response. */
+/** Cap on errors[] length in poll responses. */
 export const CSV_IMPORT_ERROR_RESPONSE_CAP = 100;

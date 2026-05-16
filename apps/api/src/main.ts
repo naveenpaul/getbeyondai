@@ -7,11 +7,12 @@ import { ValidationPipe } from '@nestjs/common';
 import multipart from '@fastify/multipart';
 import { AppModule } from './app.module';
 
-// CSV import file-size cap. Bumped from the @fastify/multipart default of 1MB.
-// At ~150 bytes/row this allows ~330k rows per upload, comfortably above the
-// "50k typical solo-founder lead list" target. Larger imports route through
-// the worker (T8-CSV.2c) once that lands.
-const CSV_UPLOAD_MAX_BYTES = 50 * 1024 * 1024; // 50 MB
+// CSV import file-size cap. Set to 5 MB to match the practical pg-boss
+// inline-payload ceiling — CSVs travel base64-encoded inside the job JSON,
+// and JSONB rows much above 5 MB make pg-boss queries chunky. The cap goes
+// back up to ~50 MB in T8-CSV.2c.3 when we route large files through object
+// storage (MinIO/S3) and reference them by key instead of inlining bytes.
+const CSV_UPLOAD_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestFastifyApplication>(
