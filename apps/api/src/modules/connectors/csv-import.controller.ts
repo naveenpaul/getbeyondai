@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Controller,
   ForbiddenException,
+  Inject,
   NotFoundException,
   Post,
   Req,
@@ -23,7 +24,19 @@ interface ParsedMultipart {
 
 @Controller('connectors/csv')
 export class CsvImportController {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly prisma: PrismaService;
+
+  // Explicit @Inject + manual assignment instead of parameter-property syntax.
+  // vitest uses esbuild which does NOT emit `design:paramtypes` decorator
+  // metadata (only tsc with `emitDecoratorMetadata: true` does). NestJS DI
+  // relies on that metadata to resolve constructor-injected services from
+  // the parameter type. Without it, `private readonly prisma: PrismaService`
+  // injects `undefined` in the test run. The explicit @Inject(PrismaService)
+  // makes the dependency resolvable in both tsc-built and esbuild-transformed
+  // execution paths.
+  constructor(@Inject(PrismaService) prisma: PrismaService) {
+    this.prisma = prisma;
+  }
 
   @Post('import')
   async import(@Req() req: FastifyRequest): Promise<CsvImportResponse> {

@@ -57,8 +57,11 @@ describe.skipIf(!DATABASE_URL)(
     });
 
     afterAll(async () => {
-      await app.close();
-      await prisma.$disconnect();
+      // Defensive — if beforeAll bailed (e.g. plugin-version mismatch), `app`
+      // and `prisma` may be undefined. Don't mask the real failure with a
+      // teardown TypeError.
+      if (app) await app.close();
+      if (prisma) await prisma.$disconnect();
     });
 
     beforeEach(async () => {
