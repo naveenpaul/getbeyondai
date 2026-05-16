@@ -39,6 +39,12 @@ export interface CsvImportInput {
   columnMapping: CsvColumnMapping;
   /** userId of the operator that triggered the import. Stored on SyncRun. */
   triggeredBy: string;
+  /**
+   * Reuse an existing SyncRun (the async producer / worker pattern). When
+   * omitted, runCsvImport creates a new SyncRun. When provided, the SyncRun
+   * must already exist; runCsvImport transitions it from `running` → terminal.
+   */
+  syncRunId?: string;
 }
 
 export interface CsvImportError {
@@ -61,14 +67,25 @@ export async function runCsvImport(
   prisma: PrismaClient,
   input: CsvImportInput,
 ): Promise<CsvImportResult> {
-  let syncRun = await prisma.syncRun.create({
-    data: {
-      orgId: input.orgId,
-      connectorAccountId: input.sourceAccountId,
-      direction: 'pull',
-      status: 'running',
-    },
-  });
+  let syncRun: SyncRun;
+  if (input.syncRunId) {
+    const existing = await prisma.syncRun.findUnique({
+      where: { id: input.syncRunId },
+    });
+    if (!existing) {
+      throw new Error(`SyncRun ${input.syncRunId} not found`);
+    }
+    syncRun = existing;
+  } else {
+    syncRun = await prisma.syncRun.create({
+      data: {
+        orgId: input.orgId,
+        connectorAccountId: input.sourceAccountId,
+        direction: 'pull',
+        status: 'running',
+      },
+    });
+  }
 
   const errors: CsvImportError[] = [];
   let yieldedCount = 0;

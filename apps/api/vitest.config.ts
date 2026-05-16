@@ -48,6 +48,14 @@ export default defineConfig({
         // around runCsvImport. Tested by 8 integration cases booting the
         // full Nest+Fastify app in csv-import.controller.integration.spec.ts.
         'src/modules/connectors/csv-import.controller.ts',
+        // pg-boss wrapper — framework wiring around a third-party library.
+        // Tested via the worker integration suite (which exercises start/send/
+        // work end-to-end against a live Postgres + pg-boss schema).
+        'src/modules/queue/queue.service.ts',
+        // Worker — registers a pg-boss handler that delegates to runCsvImport.
+        // Tested by csv-import.worker.integration.spec.ts (enqueue + assert
+        // SyncRun terminal state).
+        'src/modules/connectors/csv-import.worker.ts',
       ],
       thresholds: {
         // CLAUDE.md: 95%+ line coverage on logic files.

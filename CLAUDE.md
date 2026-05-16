@@ -46,6 +46,32 @@ Read the full version in `../gtm_teammates_plan.md`. The non-negotiable ones:
    advances state machine atomically. Idempotency keys on all CRM writes.
 8. **Hard cost budget per AgentRun.** Exceeding aborts the run; user must raise it.
 
+## NestJS dependency injection — pitfall
+
+**Use explicit `@Inject(TypeName)` on constructor parameters, not the
+parameter-property shorthand `constructor(private readonly svc: Type)`.**
+
+vitest's TypeScript transform (esbuild) does NOT emit `design:paramtypes`
+decorator metadata. NestJS DI reads that metadata to map a parameter type
+to a provider — without it, parameter properties inject `undefined`. The
+test passes via the production build (tsc + `emitDecoratorMetadata: true`)
+but fails on every vitest integration run.
+
+```typescript
+// ❌ Works under tsc, breaks under vitest+esbuild — silent undefined injection.
+constructor(private readonly prisma: PrismaService) {}
+
+// ✅ Works in both. Manual assignment because @Inject can't decorate a
+//    parameter-property in TS.
+private readonly prisma: PrismaService;
+constructor(@Inject(PrismaService) prisma: PrismaService) {
+  this.prisma = prisma;
+}
+```
+
+Same rule applies to services, controllers, workers, and any other DI-wired
+class. The verbosity is a tax we pay so test + prod paths agree.
+
 ## Local development
 
 **Local servers are managed by the user, not Claude.**
