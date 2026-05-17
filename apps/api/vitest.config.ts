@@ -75,6 +75,11 @@ export default defineConfig({
         // EchoDestination is a test-only stub. Exists to give the worker
         // something to call for every kind in non-production environments.
         'src/modules/drafts/destinations/echo.destination.ts',
+        // Reapers — Prisma-bound periodic sweepers. The reap() logic is
+        // tested end-to-end against live Postgres; the cron registration
+        // is library wiring.
+        'src/modules/reapers/sync-run.reaper.ts',
+        'src/modules/reapers/draft-action.reaper.ts',
       ],
       thresholds: {
         // CLAUDE.md: 95%+ line coverage on logic files.

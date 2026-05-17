@@ -90,6 +90,21 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Register a cron-style recurring job. Standard 5-field cron syntax.
+   * Idempotent — re-scheduling with the same name updates the spec.
+   */
+  async schedule(
+    queue: string,
+    cron: string,
+    data: Record<string, unknown> = {},
+    options?: PgBoss.ScheduleOptions,
+  ): Promise<void> {
+    const boss = this.requireBoss();
+    await this.ensureQueue(queue, boss);
+    await boss.schedule(queue, cron, data, options ?? {});
+  }
+
+  /**
    * Internal accessor exposed for tests that need to drain queues or poke
    * pg-boss directly. NOT for production code — go through send / work.
    */
