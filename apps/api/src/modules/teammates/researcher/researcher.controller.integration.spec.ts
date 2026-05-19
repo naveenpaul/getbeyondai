@@ -1,18 +1,20 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * E2E integration test for the Researcher demo path (T4c).
+ * E2E integration test for the Researcher async demo path (T4c + T4d).
  *
  * Mocks: Anthropic SDK at the module boundary (scripted tool_use turns),
  * fetch() at the global (scripted Brave + page responses). DB is real.
  *
- * The flow we're proving:
+ * The flow we're proving (async/worker pattern):
  *   POST /teammates/researcher/run { orgId, target }
- *     → AgentRun created (status=running)
+ *     → 202 { runId, status: 'running' }
+ *     → pg-boss enqueues job
+ *     → ResearcherWorker picks it up
  *     → loop: brave_search → fetch_url (Citation persisted) → emit_draft
- *     → Draft + Claims persisted
- *     → AgentRun status=completed, outputDraftId set
- *     → response: { runId, draftId, costCents, toolCallCount }
+ *     → AgentRun transitions to status=completed, Draft + Claims persisted
+ *   GET /teammates/researcher/runs/:id?orgId=
+ *     → 200 with full snapshot incl. draft + claims w/ citation URLs
  */
 
 const { mockAnthropicCreate } = vi.hoisted(() => ({
@@ -34,8 +36,11 @@ import {
 } from '@nestjs/platform-fastify';
 import { PrismaClient } from '@prisma/client';
 import type Anthropic from '@anthropic-ai/sdk';
+import type { ResearcherRunStatusResponse } from './researcher.dto';
 
 const DATABASE_URL = process.env.DATABASE_URL;
+const POLL_TIMEOUT_MS = 15_000;
+const POLL_INTERVAL_MS = 50;
 
 function fakeMessage(opts: {
   content: Anthropic.ContentBlock[];
@@ -66,11 +71,12 @@ function toolUseBlock(
 }
 
 describe.skipIf(!DATABASE_URL)(
-  'ResearcherController (integration)',
+  'ResearcherController (integration, async)',
   () => {
     let app: NestFastifyApplication;
     let prisma: PrismaClient;
     let orgA: string;
+    let orgB: string;
     let originalFetch: typeof fetch;
 
     beforeAll(async () => {
@@ -82,7 +88,6 @@ describe.skipIf(!DATABASE_URL)(
       }
       process.env.ANTHROPIC_API_KEY = 'test-anthropic-key';
       process.env.BRAVE_SEARCH_API_KEY = 'test-brave-key';
-      // Must be set for CredentialManager (loaded by ConnectorsModule).
       process.env.CREDENTIAL_MASTER_KEY = Buffer.from(
         new Uint8Array(32).fill(7),
       ).toString('base64');
@@ -127,8 +132,10 @@ describe.skipIf(!DATABASE_URL)(
           `TRUNCATE TABLE pgboss.job, pgboss.archive RESTART IDENTITY`,
         )
         .catch(() => {});
-      const o = await prisma.organization.create({ data: { name: 'OrgA' } });
-      orgA = o.id;
+      const o1 = await prisma.organization.create({ data: { name: 'OrgA' } });
+      const o2 = await prisma.organization.create({ data: { name: 'OrgB' } });
+      orgA = o1.id;
+      orgB = o2.id;
     });
 
     function scriptFetch(handlers: Array<(url: string) => Response | null>) {
@@ -161,8 +168,30 @@ describe.skipIf(!DATABASE_URL)(
       });
     }
 
-    it('happy path: search → fetch → emit_draft → persisted Draft + Claims', async () => {
-      // Script the HTTP layer: Brave Search → page fetch.
+    async function pollUntilDone(
+      runId: string,
+      orgId: string,
+    ): Promise<ResearcherRunStatusResponse> {
+      const start = Date.now();
+      while (Date.now() - start < POLL_TIMEOUT_MS) {
+        const res = await app.inject({
+          method: 'GET',
+          url: `/teammates/researcher/runs/${runId}?orgId=${orgId}`,
+        });
+        if (res.statusCode === 200) {
+          const body = res.json() as ResearcherRunStatusResponse;
+          if (body.status !== 'running') return body;
+        }
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      }
+      throw new Error(
+        `AgentRun ${runId} did not terminate in ${POLL_TIMEOUT_MS}ms`,
+      );
+    }
+
+    // ─── POST /run + GET /runs/:id — happy path ──────────────────────
+
+    it('POST returns 202 + runId immediately, GET polls to completed draft', async () => {
       scriptFetch([
         (url) =>
           url.startsWith('https://api.search.brave.com')
@@ -190,43 +219,26 @@ describe.skipIf(!DATABASE_URL)(
         () => null,
       ]);
 
-      // Script the Anthropic SDK: 3 turns (search → fetch → emit_draft).
       mockAnthropicCreate
         .mockResolvedValueOnce(
           fakeMessage({
             content: [
-              toolUseBlock(
-                'brave_search',
-                { query: 'Acme dental SaaS' },
-                'tu-1',
-              ),
+              toolUseBlock('brave_search', { query: 'Acme dental SaaS' }, 'tu-1'),
             ],
           }),
         )
         .mockResolvedValueOnce(
           fakeMessage({
             content: [
-              toolUseBlock(
-                'fetch_url',
-                { url: 'https://acme.example/about' },
-                'tu-2',
-              ),
+              toolUseBlock('fetch_url', { url: 'https://acme.example/about' }, 'tu-2'),
             ],
           }),
         )
-        // The loop will hand us the fetch_url result which includes the
-        // citationId. The model must cite it back in emit_draft.
-        // To make this test deterministic, we look it up from the DB
-        // mid-flight via the implementation factory below.
         .mockImplementationOnce(async () => {
-          // Find the Citation row created by the fetch_url tool.
-          const citations = await prisma.citation.findMany({
+          const cit = await prisma.citation.findFirst({
             where: { url: 'https://acme.example/about' },
           });
-          const citationId = citations[0]?.id;
-          if (!citationId) {
-            throw new Error('test setup: expected a Citation row by now');
-          }
+          if (!cit) throw new Error('test: expected Citation by now');
           return fakeMessage({
             content: [
               toolUseBlock(
@@ -241,11 +253,11 @@ describe.skipIf(!DATABASE_URL)(
                   claims: [
                     {
                       text: 'Acme makes SaaS for dental practices.',
-                      citationId,
+                      citationId: cit.id,
                     },
                     {
                       text: 'Acme raised $5M Series A in March 2026.',
-                      citationId,
+                      citationId: cit.id,
                     },
                   ],
                 },
@@ -255,7 +267,7 @@ describe.skipIf(!DATABASE_URL)(
           });
         });
 
-      const res = await app.inject({
+      const enqueueRes = await app.inject({
         method: 'POST',
         url: '/teammates/researcher/run',
         payload: {
@@ -265,38 +277,29 @@ describe.skipIf(!DATABASE_URL)(
         },
         headers: { 'content-type': 'application/json' },
       });
-      expect(res.statusCode).toBe(201);
-      const body = res.json() as {
+      expect(enqueueRes.statusCode).toBe(202);
+      const enqueue = enqueueRes.json() as {
         runId: string;
-        status: string;
-        draftId?: string;
-        costCents: number;
-        toolCallCount: number;
+        status: 'running';
       };
-      expect(body.status).toBe('completed');
-      expect(body.draftId).toBeTruthy();
-      expect(body.toolCallCount).toBe(3);
-      expect(body.costCents).toBeGreaterThan(0);
+      expect(enqueue.status).toBe('running');
+      expect(enqueue.runId).toBeTruthy();
 
-      const run = await prisma.agentRun.findUnique({
-        where: { id: body.runId },
-      });
-      expect(run?.status).toBe('completed');
-      expect(run?.outputDraftId).toBe(body.draftId);
-      expect(run?.teammate).toBe('researcher');
+      // The worker hasn't necessarily run yet — initial poll might still show running.
+      const finalState = await pollUntilDone(enqueue.runId, orgA);
+      expect(finalState.status).toBe('completed');
+      expect(finalState.runId).toBe(enqueue.runId);
+      expect(finalState.completedAt).toBeTruthy();
+      expect(finalState.toolCallCount).toBe(3);
+      expect(finalState.costCents).toBeGreaterThan(0);
 
-      const draft = await prisma.draft.findUnique({
-        where: { id: body.draftId! },
-        include: { claims: true },
-      });
-      expect(draft?.type).toBe('research_brief');
-      expect(draft?.claims).toHaveLength(2);
-      // Both claims grounded in a real Citation row.
-      const citationIds = draft?.claims.map((c) => c.citationId);
-      const cit = await prisma.citation.findFirst({
-        where: { url: 'https://acme.example/about' },
-      });
-      expect(citationIds).toContain(cit?.id);
+      expect(finalState.draft).not.toBeNull();
+      expect(finalState.draft?.type).toBe('research_brief');
+      expect(finalState.draft?.claims).toHaveLength(2);
+      // Each claim carries the citationUrl joined from Citation.
+      for (const c of finalState.draft!.claims) {
+        expect(c.citationUrl).toBe('https://acme.example/about');
+      }
     });
 
     it('uncited claim is dropped at persistence; cited siblings survive', async () => {
@@ -332,7 +335,6 @@ describe.skipIf(!DATABASE_URL)(
                   content: { headline: 'h' },
                   claims: [
                     { text: 'cited fact', citationId: cit?.id ?? '' },
-                    // Uncited + not abstained — must be dropped.
                     { text: 'hallucinated fact', citationId: null },
                   ],
                 },
@@ -342,44 +344,40 @@ describe.skipIf(!DATABASE_URL)(
           });
         });
 
-      const res = await app.inject({
+      const enqueueRes = await app.inject({
         method: 'POST',
         url: '/teammates/researcher/run',
         payload: { orgId: orgA, triggeredBy: 'u', target: 'x' },
         headers: { 'content-type': 'application/json' },
       });
-      expect(res.statusCode).toBe(201);
-      const body = res.json() as { draftId: string };
-      const draft = await prisma.draft.findUnique({
-        where: { id: body.draftId },
-        include: { claims: true },
-      });
-      // Only the cited claim survived.
-      expect(draft?.claims).toHaveLength(1);
-      expect(draft?.claims[0]?.text).toBe('cited fact');
+      expect(enqueueRes.statusCode).toBe(202);
+      const { runId } = enqueueRes.json() as { runId: string };
+      const finalState = await pollUntilDone(runId, orgA);
+
+      expect(finalState.status).toBe('completed');
+      expect(finalState.draft?.claims).toHaveLength(1);
+      expect(finalState.draft?.claims[0]?.text).toBe('cited fact');
     });
 
-    it('all-uncited emit_draft → retry message → model exhausts tool calls → abstained', async () => {
+    it('all-uncited emit_draft → loop exhausts maxToolCalls → abstained', async () => {
       scriptFetch([() => null]);
-      mockAnthropicCreate
-        // Three turns all with the same uncited emit_draft attempt
-        .mockResolvedValue(
-          fakeMessage({
-            content: [
-              toolUseBlock(
-                'emit_draft',
-                {
-                  type: 'research_brief',
-                  content: {},
-                  claims: [{ text: 'fact', citationId: null }],
-                },
-                `tu-${Math.random()}`,
-              ),
-            ],
-          }),
-        );
+      mockAnthropicCreate.mockResolvedValue(
+        fakeMessage({
+          content: [
+            toolUseBlock(
+              'emit_draft',
+              {
+                type: 'research_brief',
+                content: {},
+                claims: [{ text: 'fact', citationId: null }],
+              },
+              `tu-${Math.random()}`,
+            ),
+          ],
+        }),
+      );
 
-      const res = await app.inject({
+      const enqueueRes = await app.inject({
         method: 'POST',
         url: '/teammates/researcher/run',
         payload: {
@@ -390,14 +388,16 @@ describe.skipIf(!DATABASE_URL)(
         },
         headers: { 'content-type': 'application/json' },
       });
-      expect(res.statusCode).toBe(201);
-      const body = res.json() as { status: string; reason?: string };
-      expect(body.status).toBe('abstained');
-      // No Draft persisted.
+      const { runId } = enqueueRes.json() as { runId: string };
+      const finalState = await pollUntilDone(runId, orgA);
+      expect(finalState.status).toBe('abstained');
+      expect(finalState.draft).toBeNull();
       expect(await prisma.draft.count()).toBe(0);
     });
 
-    it('unknown orgId → 404', async () => {
+    // ─── POST /run — validation ──────────────────────────────────────
+
+    it('unknown orgId → 404 (no AgentRun created, no job enqueued)', async () => {
       const res = await app.inject({
         method: 'POST',
         url: '/teammates/researcher/run',
@@ -405,6 +405,7 @@ describe.skipIf(!DATABASE_URL)(
         headers: { 'content-type': 'application/json' },
       });
       expect(res.statusCode).toBe(404);
+      expect(await prisma.agentRun.count()).toBe(0);
     });
 
     it('missing target → 400', async () => {
@@ -417,20 +418,76 @@ describe.skipIf(!DATABASE_URL)(
       expect(res.statusCode).toBe(400);
     });
 
-    it('persists ModelCall + ToolCall rows for the audit log', async () => {
+    // ─── GET /runs/:id — tenant guards + missing rows ───────────────
+
+    it('GET /runs/:id without orgId → 400', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/teammates/researcher/runs/anything',
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('GET /runs/:id with unknown id → 404', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/teammates/researcher/runs/does-not-exist?orgId=${orgA}`,
+      });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('GET /runs/:id refuses cross-org access → 403', async () => {
+      const run = await prisma.agentRun.create({
+        data: {
+          orgId: orgA,
+          teammate: 'researcher',
+          triggeredBy: 'u',
+          status: 'completed',
+          inputContext: {},
+        },
+      });
+      const res = await app.inject({
+        method: 'GET',
+        url: `/teammates/researcher/runs/${run.id}?orgId=${orgB}`,
+      });
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('GET /runs/:id returns running status with null draft while in progress', async () => {
+      const run = await prisma.agentRun.create({
+        data: {
+          orgId: orgA,
+          teammate: 'researcher',
+          triggeredBy: 'u',
+          status: 'running',
+          inputContext: { target: 'x' },
+        },
+      });
+      const res = await app.inject({
+        method: 'GET',
+        url: `/teammates/researcher/runs/${run.id}?orgId=${orgA}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as ResearcherRunStatusResponse;
+      expect(body.status).toBe('running');
+      expect(body.draft).toBeNull();
+      expect(body.completedAt).toBeNull();
+      expect(body.toolCallCount).toBe(0);
+    });
+
+    // ─── Audit log persisted across the async hop ────────────────────
+
+    it('ModelCall + ToolCall rows persisted under the AgentRun even when run abstains', async () => {
       scriptFetch([
         (url) =>
           url.startsWith('https://api.search.brave.com')
             ? jsonResponse({ web: { results: [] } })
             : null,
       ]);
-      // 1) brave_search (empty results)  2) emit_draft (abstained)
       mockAnthropicCreate
         .mockResolvedValueOnce(
           fakeMessage({
-            content: [
-              toolUseBlock('brave_search', { query: 'x' }, 'tu-1'),
-            ],
+            content: [toolUseBlock('brave_search', { query: 'x' }, 'tu-1')],
           }),
         )
         .mockResolvedValueOnce(
@@ -455,32 +512,27 @@ describe.skipIf(!DATABASE_URL)(
           }),
         );
 
-      const res = await app.inject({
+      const enqueueRes = await app.inject({
         method: 'POST',
         url: '/teammates/researcher/run',
-        payload: { orgId: orgA, triggeredBy: 'u', target: 'unknown company' },
+        payload: { orgId: orgA, triggeredBy: 'u', target: 'unknown' },
         headers: { 'content-type': 'application/json' },
       });
-      expect(res.statusCode).toBe(201);
-      const body = res.json() as { runId: string; draftId: string };
+      const { runId } = enqueueRes.json() as { runId: string };
+      const finalState = await pollUntilDone(runId, orgA);
+      expect(finalState.status).toBe('completed');
 
-      const modelCalls = await prisma.modelCall.findMany({
-        where: { runId: body.runId },
-      });
+      const modelCalls = await prisma.modelCall.findMany({ where: { runId } });
       expect(modelCalls.length).toBeGreaterThanOrEqual(2);
       const toolCalls = await prisma.toolCall.findMany({
-        where: { runId: body.runId },
+        where: { runId },
         orderBy: { toolSeq: 'asc' },
       });
       expect(toolCalls.map((t) => t.toolName)).toEqual([
         'brave_search',
         'emit_draft',
       ]);
-      // Cost was accumulated on the AgentRun.
-      const run = await prisma.agentRun.findUnique({
-        where: { id: body.runId },
-      });
-      expect(run?.costCents).toBeGreaterThan(0);
+      expect(finalState.toolCallCount).toBe(2);
     });
   },
 );

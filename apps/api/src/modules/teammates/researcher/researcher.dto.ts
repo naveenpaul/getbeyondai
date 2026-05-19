@@ -12,20 +12,38 @@ export const ResearcherRunRequestSchema = z.object({
   target: z.string().min(1, 'target is required'),
   budgetCents: z.number().int().min(1).max(10_000).optional(),
 });
-
 export type ResearcherRunRequest = z.infer<typeof ResearcherRunRequestSchema>;
 
-/**
- * Response from POST /teammates/researcher/run. 200 OK — the call is
- * synchronous for v1 (typical run completes in 30-60s, under the request
- * timeout). Async + poll lands later when long-running queries become a
- * thing.
- */
-export interface ResearcherRunResponse {
+/** Returned by POST /teammates/researcher/run. 202 Accepted. */
+export interface ResearcherRunEnqueueResponse {
   runId: string;
-  status: 'completed' | 'abstained';
-  reason?: string;
-  draftId?: string;
+  status: 'running';
+}
+
+/**
+ * Returned by GET /teammates/researcher/runs/:id. Caller polls until
+ * status is terminal (`completed | abstained | failed`).
+ */
+export interface ResearcherRunStatusResponse {
+  runId: string;
+  status: 'running' | 'completed' | 'abstained' | 'failed';
+  reason: string | null;
+  startedAt: string;
+  completedAt: string | null;
   costCents: number;
   toolCallCount: number;
+  /** Present once status=completed; null otherwise. */
+  draft: {
+    id: string;
+    type: string;
+    content: unknown;
+    claims: Array<{
+      id: string;
+      text: string;
+      citationId: string | null;
+      citationUrl: string | null;
+      abstained: boolean;
+      confidence: number | null;
+    }>;
+  } | null;
 }

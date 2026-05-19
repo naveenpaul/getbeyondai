@@ -9,6 +9,7 @@ import { AppModule } from '../../app.module';
 import { SyncRunReaper } from './sync-run.reaper';
 import { DraftActionReaper } from './draft-action.reaper';
 import { OAuthStateReaper } from './oauth-state.reaper';
+import { AgentRunReaper } from './agent-run.reaper';
 import { CURRENT_PAYLOAD_SCHEMA_VERSION } from '../drafts/draft-action.schemas';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -21,6 +22,7 @@ describe.skipIf(!DATABASE_URL)(
     let syncRunReaper: SyncRunReaper;
     let draftActionReaper: DraftActionReaper;
     let oauthStateReaper: OAuthStateReaper;
+    let agentRunReaper: AgentRunReaper;
     let orgA: string;
     let csvAccountA: string;
     let draftId: string;
@@ -45,6 +47,7 @@ describe.skipIf(!DATABASE_URL)(
       syncRunReaper = app.get(SyncRunReaper);
       draftActionReaper = app.get(DraftActionReaper);
       oauthStateReaper = app.get(OAuthStateReaper);
+      agentRunReaper = app.get(AgentRunReaper);
 
       prisma = new PrismaClient({
         datasources: { db: { url: DATABASE_URL! } },
@@ -330,6 +333,89 @@ describe.skipIf(!DATABASE_URL)(
         where: { id: future.id },
       });
       expect(reloaded).toBeNull();
+    });
+
+    // ─── AgentRunReaper ────────────────────────────────────────────────
+
+    it('AgentRunReaper marks stale running AgentRuns as failed with reason=stale_run', async () => {
+      const oldBeatAt = new Date(Date.now() - 10 * 60 * 1000); // 10 min ago
+      const stale = await prisma.agentRun.create({
+        data: {
+          orgId: orgA,
+          teammate: 'researcher',
+          triggeredBy: 'usr_test',
+          status: 'running',
+          inputContext: { target: 'Acme' },
+          lastBeatAt: oldBeatAt,
+        },
+      });
+
+      const reaped = await agentRunReaper.reap();
+      expect(reaped).toBeGreaterThanOrEqual(1);
+
+      const reloaded = await prisma.agentRun.findUnique({
+        where: { id: stale.id },
+      });
+      expect(reloaded?.status).toBe('failed');
+      expect(reloaded?.reason).toBe('stale_run');
+      expect(reloaded?.completedAt).toBeTruthy();
+    });
+
+    it('AgentRunReaper leaves runs with fresh heartbeats alone', async () => {
+      const fresh = await prisma.agentRun.create({
+        data: {
+          orgId: orgA,
+          teammate: 'researcher',
+          triggeredBy: 'usr_test',
+          status: 'running',
+          inputContext: {},
+          // lastBeatAt defaults to now() — well inside the 5-min threshold.
+        },
+      });
+      await agentRunReaper.reap();
+      const reloaded = await prisma.agentRun.findUnique({
+        where: { id: fresh.id },
+      });
+      expect(reloaded?.status).toBe('running');
+      expect(reloaded?.reason).toBeNull();
+    });
+
+    it('AgentRunReaper does not touch terminal rows even if lastBeatAt is old', async () => {
+      const completed = await prisma.agentRun.create({
+        data: {
+          orgId: orgA,
+          teammate: 'researcher',
+          triggeredBy: 'usr_test',
+          status: 'completed',
+          inputContext: {},
+          lastBeatAt: new Date(Date.now() - 60 * 60 * 1000), // 1 hour ago
+          completedAt: new Date(Date.now() - 50 * 60 * 1000),
+        },
+      });
+      await agentRunReaper.reap();
+      const reloaded = await prisma.agentRun.findUnique({
+        where: { id: completed.id },
+      });
+      expect(reloaded?.status).toBe('completed');
+    });
+
+    it('AgentRunReaper accepts an injected staleMs for fast tests', async () => {
+      const justOver = await prisma.agentRun.create({
+        data: {
+          orgId: orgA,
+          teammate: 'researcher',
+          triggeredBy: 'usr_test',
+          status: 'running',
+          inputContext: {},
+          lastBeatAt: new Date(Date.now() - 250),
+        },
+      });
+      const reaped = await agentRunReaper.reap(new Date(), 100);
+      expect(reaped).toBeGreaterThanOrEqual(1);
+      const reloaded = await prisma.agentRun.findUnique({
+        where: { id: justOver.id },
+      });
+      expect(reloaded?.status).toBe('failed');
     });
   },
 );

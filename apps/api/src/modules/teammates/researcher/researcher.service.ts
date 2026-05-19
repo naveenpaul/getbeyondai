@@ -38,6 +38,14 @@ export interface ResearchInput {
    * Researcher prompt handles all three shapes.
    */
   target: string;
+  /**
+   * Optional: reuse an existing AgentRun row. When provided, runResearch
+   * skips AgentRun.create and drives the existing row to terminal. This is
+   * how the async-worker pattern (T4d) hands work off: the controller
+   * creates the run synchronously to return a runId immediately, then the
+   * worker picks up the job and calls runResearch with this field set.
+   */
+  runId?: string;
   /** Optional overrides. Production callers stick with defaults. */
   modelName?: string;
   budgetCents?: number;
@@ -80,22 +88,27 @@ export async function runResearch(
   deps: ResearchDeps,
   input: ResearchInput,
 ): Promise<ResearchResult> {
-  // Create the AgentRun row up front. Status='running' lets the reaper see
-  // it; the loop transitions it terminal.
-  const run = await deps.prisma.agentRun.create({
-    data: {
-      orgId: input.orgId,
-      teammate: RESEARCHER_NAME,
-      triggeredBy: input.triggeredBy,
-      status: 'running',
-      inputContext: { target: input.target } satisfies Record<string, unknown>,
-    },
-  });
+  // Reuse a pre-created AgentRun (async-worker path) or create one inline
+  // (sync path / direct service callers). Either way, the loop transitions
+  // the row to terminal.
+  let runId = input.runId;
+  if (!runId) {
+    const run = await deps.prisma.agentRun.create({
+      data: {
+        orgId: input.orgId,
+        teammate: RESEARCHER_NAME,
+        triggeredBy: input.triggeredBy,
+        status: 'running',
+        inputContext: { target: input.target } satisfies Record<string, unknown>,
+      },
+    });
+    runId = run.id;
+  }
 
   const tools = deps.tools ?? [braveSearchTool, fetchUrlTool];
 
   const result = await runAgent({
-    runId: run.id,
+    runId,
     orgId: input.orgId,
     teammate: RESEARCHER_NAME,
     modelName: input.modelName ?? DEFAULTS.modelName,
@@ -110,7 +123,7 @@ export async function runResearch(
   });
 
   return {
-    runId: run.id,
+    runId,
     status: result.status,
     reason: result.reason,
     draftId: result.draftId,

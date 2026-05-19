@@ -1,21 +1,23 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../../common/prisma/prisma.module';
+import { QueueModule } from '../queue/queue.module';
 import {
   ANTHROPIC_CLIENT,
   createAnthropicClient,
 } from './runtime/call-model';
 import { ResearcherController } from './researcher/researcher.controller';
+import { ResearcherWorker } from './researcher/researcher.worker';
 
 /**
  * Teammates module — wires the Anthropic SDK singleton and registers all
- * teammate controllers. The runtime itself is import-only (no DI surface);
- * services consume it as pure functions.
+ * teammate controllers + workers. The runtime itself is import-only (no DI
+ * surface); services consume it as pure functions.
  *
  * Future teammates (SDR Drafter, Content Drafter, Reply Handler) add their
- * controllers here without touching the runtime.
+ * controllers + workers here without touching the runtime.
  */
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, QueueModule],
   controllers: [ResearcherController],
   providers: [
     {
@@ -23,6 +25,7 @@ import { ResearcherController } from './researcher/researcher.controller';
       useFactory: () =>
         createAnthropicClient(process.env.ANTHROPIC_API_KEY ?? ''),
     },
+    ResearcherWorker,
   ],
   exports: [ANTHROPIC_CLIENT],
 })

@@ -2,44 +2,62 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
+  Get,
+  HttpCode,
   Inject,
   NotFoundException,
+  Param,
   Post,
+  Query,
 } from '@nestjs/common';
 import { PrismaService } from '../../../common/prisma/prisma.service';
-import { ANTHROPIC_CLIENT } from '../runtime/call-model';
-import type { AnthropicMessagesClient } from '../runtime/call-model';
-import { runResearch } from './researcher.service';
+import { QueueService } from '../../queue/queue.service';
+import { RESEARCHER_NAME } from './researcher.service';
+import {
+  RESEARCHER_RUN_QUEUE,
+  type ResearcherRunJobPayload,
+} from './researcher.worker';
 import {
   ResearcherRunRequestSchema,
-  type ResearcherRunResponse,
+  type ResearcherRunEnqueueResponse,
+  type ResearcherRunStatusResponse,
 } from './researcher.dto';
 
 /**
- * POST /teammates/researcher/run (T4c).
+ * Researcher HTTP endpoints (T4d.2).
  *
- * Body: { orgId, triggeredBy, target, budgetCents? }
- * Response: { runId, status, draftId?, costCents, toolCallCount }
+ *   POST /teammates/researcher/run
+ *     Body: { orgId, triggeredBy, target, budgetCents? }
+ *     → 202 { runId, status: 'running' }
+ *     Creates the AgentRun synchronously + enqueues the worker job, then
+ *     returns immediately. Caller polls GET /runs/:id until terminal.
  *
- * Synchronous for v1 — research runs typically complete in 30-60s, under
- * the request timeout. The AgentRun row is created up front so the user
- * can always look up `/audit?runId=…` even if the connection drops.
+ *   GET /teammates/researcher/runs/:id?orgId=
+ *     → 200 ResearcherRunStatusResponse
+ *     Returns the AgentRun's current state. When status='completed', also
+ *     returns the persisted Draft + Claims with their citation URLs joined
+ *     for inline display.
+ *
+ * Auth (pre-real-auth stub): orgId arrives via body / query. Real auth
+ * wires it from OrgContext.
  */
 @Controller('teammates/researcher')
 export class ResearcherController {
   private readonly prisma: PrismaService;
-  private readonly anthropic: AnthropicMessagesClient;
+  private readonly queue: QueueService;
 
   constructor(
     @Inject(PrismaService) prisma: PrismaService,
-    @Inject(ANTHROPIC_CLIENT) anthropic: AnthropicMessagesClient,
+    @Inject(QueueService) queue: QueueService,
   ) {
     this.prisma = prisma;
-    this.anthropic = anthropic;
+    this.queue = queue;
   }
 
   @Post('run')
-  async run(@Body() body: unknown): Promise<ResearcherRunResponse> {
+  @HttpCode(202)
+  async enqueue(@Body() body: unknown): Promise<ResearcherRunEnqueueResponse> {
     const parsed = ResearcherRunRequestSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(
@@ -58,16 +76,86 @@ export class ResearcherController {
       );
     }
 
-    const result = await runResearch(
-      { prisma: this.prisma, anthropic: this.anthropic },
-      {
+    // Mint the AgentRun synchronously so the caller has a runId to poll on.
+    // The worker drives this same row to terminal.
+    const run = await this.prisma.agentRun.create({
+      data: {
         orgId: parsed.data.orgId,
+        teammate: RESEARCHER_NAME,
         triggeredBy: parsed.data.triggeredBy,
-        target: parsed.data.target,
-        budgetCents: parsed.data.budgetCents,
+        status: 'running',
+        inputContext: {
+          target: parsed.data.target,
+        } satisfies Record<string, unknown>,
       },
-    );
+    });
 
-    return result;
+    await this.queue.send<ResearcherRunJobPayload>(RESEARCHER_RUN_QUEUE, {
+      runId: run.id,
+      orgId: parsed.data.orgId,
+      triggeredBy: parsed.data.triggeredBy,
+      target: parsed.data.target,
+      budgetCents: parsed.data.budgetCents,
+    });
+
+    return { runId: run.id, status: 'running' };
+  }
+
+  @Get('runs/:id')
+  async getRun(
+    @Param('id') id: string,
+    @Query('orgId') orgId: string | undefined,
+  ): Promise<ResearcherRunStatusResponse> {
+    if (!orgId) {
+      throw new BadRequestException('orgId query parameter is required');
+    }
+
+    const run = await this.prisma.agentRun.findUnique({
+      where: { id },
+      include: {
+        drafts: {
+          where: { teammate: RESEARCHER_NAME },
+          include: { claims: { include: { citation: true } } },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
+        toolCalls: { select: { id: true } },
+      },
+    });
+
+    if (!run) {
+      throw new NotFoundException(`AgentRun ${id} not found`);
+    }
+    if (run.orgId !== orgId) {
+      throw new ForbiddenException('AgentRun belongs to another org');
+    }
+
+    const draftRow = run.drafts[0];
+    const draft = draftRow
+      ? {
+          id: draftRow.id,
+          type: draftRow.type as string,
+          content: draftRow.content,
+          claims: draftRow.claims.map((c) => ({
+            id: c.id,
+            text: c.text,
+            citationId: c.citationId,
+            citationUrl: c.citation?.url ?? null,
+            abstained: c.abstained,
+            confidence: c.confidence,
+          })),
+        }
+      : null;
+
+    return {
+      runId: run.id,
+      status: run.status as ResearcherRunStatusResponse['status'],
+      reason: run.reason,
+      startedAt: run.startedAt.toISOString(),
+      completedAt: run.completedAt?.toISOString() ?? null,
+      costCents: run.costCents,
+      toolCallCount: run.toolCalls.length,
+      draft,
+    };
   }
 }
