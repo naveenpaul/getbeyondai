@@ -5,6 +5,10 @@ import {
   ANTHROPIC_CLIENT,
   createAnthropicClient,
 } from './runtime/call-model';
+import {
+  InMemoryRunEventBus,
+  RUN_EVENT_BUS,
+} from './runtime/run-event-bus';
 import { ResearcherController } from './researcher/researcher.controller';
 import { ResearcherWorker } from './researcher/researcher.worker';
 
@@ -25,8 +29,12 @@ import { ResearcherWorker } from './researcher/researcher.worker';
       useFactory: () =>
         createAnthropicClient(process.env.ANTHROPIC_API_KEY ?? ''),
     },
+    {
+      provide: RUN_EVENT_BUS,
+      useClass: InMemoryRunEventBus,
+    },
     ResearcherWorker,
   ],
-  exports: [ANTHROPIC_CLIENT],
+  exports: [ANTHROPIC_CLIENT, RUN_EVENT_BUS],
 })
 export class TeammatesModule {}

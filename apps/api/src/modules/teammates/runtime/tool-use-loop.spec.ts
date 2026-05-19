@@ -3,6 +3,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { runAgent } from './tool-use-loop';
 import type { AgentTool } from './agent-tool';
 import type { AnthropicMessagesClient } from './call-model';
+import type { RunEvent } from './run-event-bus';
 
 /**
  * Unit tests against a fake Anthropic client + in-memory Prisma. The
@@ -842,6 +843,179 @@ describe('runAgent — parallel tool dispatch within a turn', () => {
     expect(turn1).toHaveLength(3);
     const flaky = turn1.find((tc) => tc.toolName === 'flaky');
     expect(flaky?.result).toMatchObject({ error: 'boom' });
+  });
+});
+
+describe('runAgent — emitEvent progress callback', () => {
+  it('happy path: emits model→tool→draft→completed events in order', async () => {
+    const prisma = makeProperFakePrisma(BASE_RUN, [
+      { id: 'cit-1', runId: 'run-1', url: 'x' },
+    ]);
+    const events: RunEvent[] = [];
+    const anthropic = makeAnthropic([
+      fakeMessage({
+        content: [
+          toolUseBlock('any_tool', {}, 'tu-1'),
+        ],
+      }),
+      fakeMessage({
+        content: [
+          toolUseBlock('emit_draft', {
+            type: 'research_brief',
+            content: {},
+            claims: [{ text: 't', citationId: 'cit-1' }],
+          }),
+        ],
+      }),
+    ]);
+    const tools: AgentTool[] = [
+      {
+        name: 'any_tool',
+        description: '',
+        inputSchema: { type: 'object' },
+        execute: vi.fn(async () => ({ ok: true })),
+      },
+    ];
+
+    await runAgent({
+      runId: 'run-1',
+      orgId: 'org-A',
+      teammate: 'researcher',
+      modelName: 'claude-sonnet-4-6',
+      systemPrompt: 's',
+      userPrompt: 'u',
+      tools,
+      budgetCents: 100,
+      maxToolCalls: 10,
+      maxWallSecs: 60,
+      prisma: prisma as never,
+      anthropic,
+      emitEvent: (e) => events.push(e),
+    });
+
+    const types = events.map((e) => e.type);
+    expect(types).toEqual([
+      'model_call_started',
+      'model_call_completed',
+      'tool_call_started', // any_tool
+      'tool_call_completed',
+      'model_call_started',
+      'model_call_completed',
+      'tool_call_started', // emit_draft
+      'draft_emitted',
+      'tool_call_completed',
+      'run_completed',
+    ]);
+    // Every event carries the runId.
+    for (const e of events) expect(e.runId).toBe('run-1');
+  });
+
+  it('abstained path: emits run_abstained with the trip reason', async () => {
+    const prisma = makeProperFakePrisma(BASE_RUN);
+    const events: RunEvent[] = [];
+    const anthropic = makeAnthropic([
+      fakeMessage({
+        content: [
+          { type: 'text', text: 'no draft' } as Anthropic.TextBlock,
+        ],
+        stopReason: 'end_turn',
+      }),
+    ]);
+
+    await runAgent({
+      runId: 'run-1',
+      orgId: 'org-A',
+      teammate: 'researcher',
+      modelName: 'claude-sonnet-4-6',
+      systemPrompt: 's',
+      userPrompt: 'u',
+      tools: [],
+      budgetCents: 100,
+      maxToolCalls: 10,
+      maxWallSecs: 60,
+      prisma: prisma as never,
+      anthropic,
+      emitEvent: (e) => events.push(e),
+    });
+
+    const last = events.at(-1);
+    expect(last?.type).toBe('run_abstained');
+    if (last?.type === 'run_abstained') {
+      expect(last.data.reason).toBe('no_draft_emitted');
+    }
+  });
+
+  it('tool_call_completed includes a summary for brave_search + fetch_url', async () => {
+    const prisma = makeProperFakePrisma(BASE_RUN, [
+      { id: 'cit-1', runId: 'run-1', url: 'x' },
+    ]);
+    const events: RunEvent[] = [];
+    const tools: AgentTool[] = [
+      {
+        name: 'brave_search',
+        description: '',
+        inputSchema: { type: 'object' },
+        execute: vi.fn(async () => ({ results: [{ url: 'u1' }, { url: 'u2' }] })),
+      },
+      {
+        name: 'fetch_url',
+        description: '',
+        inputSchema: { type: 'object' },
+        execute: vi.fn(async () => ({
+          url: 'https://acme.example',
+          citationId: 'cit-1',
+        })),
+      },
+    ];
+    const anthropic = makeAnthropic([
+      fakeMessage({
+        content: [
+          toolUseBlock('brave_search', { q: 'x' }, 'tu-1'),
+          toolUseBlock('fetch_url', { url: 'https://acme.example' }, 'tu-2'),
+        ],
+      }),
+      fakeMessage({
+        content: [
+          toolUseBlock('emit_draft', {
+            type: 'research_brief',
+            content: {},
+            claims: [{ text: 't', citationId: 'cit-1' }],
+          }),
+        ],
+      }),
+    ]);
+
+    await runAgent({
+      runId: 'run-1',
+      orgId: 'org-A',
+      teammate: 'researcher',
+      modelName: 'claude-sonnet-4-6',
+      systemPrompt: 's',
+      userPrompt: 'u',
+      tools,
+      budgetCents: 100,
+      maxToolCalls: 10,
+      maxWallSecs: 60,
+      prisma: prisma as never,
+      anthropic,
+      emitEvent: (e) => events.push(e),
+    });
+
+    const completions = events.filter(
+      (e) => e.type === 'tool_call_completed',
+    );
+    const search = completions.find(
+      (e) => e.type === 'tool_call_completed' && e.data.toolName === 'brave_search',
+    );
+    const fetch = completions.find(
+      (e) => e.type === 'tool_call_completed' && e.data.toolName === 'fetch_url',
+    );
+    if (search?.type === 'tool_call_completed') {
+      expect(search.data.summary).toBe('2 results');
+    } else expect.fail('no brave_search completion');
+    if (fetch?.type === 'tool_call_completed') {
+      expect(fetch.data.summary).toContain('https://acme.example');
+    } else expect.fail('no fetch_url completion');
   });
 });
 

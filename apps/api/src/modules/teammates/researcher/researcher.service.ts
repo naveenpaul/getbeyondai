@@ -4,6 +4,7 @@ import { runAgent, type RunAgentResult } from '../runtime/tool-use-loop';
 import type { AgentTool } from '../runtime/agent-tool';
 import { braveSearchTool } from '../runtime/tools/brave-search';
 import { fetchUrlTool } from '../runtime/tools/fetch-url';
+import type { RunEvent } from '../runtime/run-event-bus';
 import {
   buildResearcherUserPrompt,
   RESEARCHER_SYSTEM_PROMPT,
@@ -58,6 +59,12 @@ export interface ResearchDeps {
   anthropic: AnthropicMessagesClient;
   /** Optional tool overrides for tests (default: brave + fetch). */
   tools?: AgentTool[];
+  /**
+   * Optional progress callback. The async worker wires this to the
+   * RunEventBus so SSE subscribers see live tool / model / draft events.
+   * Direct sync callers can omit.
+   */
+  emitEvent?: (event: RunEvent) => void;
 }
 
 export interface ResearchResult {
@@ -120,6 +127,7 @@ export async function runResearch(
     maxWallSecs: input.maxWallSecs ?? DEFAULTS.maxWallSecs,
     prisma: deps.prisma,
     anthropic: deps.anthropic,
+    emitEvent: deps.emitEvent,
   });
 
   return {

@@ -5,6 +5,7 @@ import {
   BudgetExceededError,
   costCentsForCall,
 } from './cost';
+import type { RunEvent } from './run-event-bus';
 
 /**
  * The single LLM chokepoint (plan v1 architecture invariant #3).
@@ -58,6 +59,19 @@ export interface CallModelParams {
   toolChoice?: Anthropic.MessageCreateParams['tool_choice'];
   /** Hard cost cap for the AgentRun in cents. */
   budgetCents: number;
+  /**
+   * Optional progress callback. When set, fires `model_call_started` BEFORE
+   * the SDK call and `model_call_completed` AFTER persistence (with the
+   * real token + cost numbers). No-op default keeps existing call sites
+   * working without changes.
+   */
+  emitEvent?: (event: RunEvent) => void;
+  /**
+   * Zero-indexed turn number within the loop. Surfaces in the event so
+   * the UI can show "Turn 3 of N". The loop bumps this per iteration;
+   * direct callers can ignore.
+   */
+  turn?: number;
 }
 
 export interface CallModelResult {
@@ -81,6 +95,13 @@ export async function callModel(
   // Pre-check: refuse to spend if we're already at or past the cap.
   // Proposed=0 here — we don't know the real cost until after the call.
   assertWithinBudget(run.costCents, 0, params.budgetCents);
+
+  params.emitEvent?.({
+    type: 'model_call_started',
+    runId: params.runId,
+    at: new Date().toISOString(),
+    data: { modelName: params.modelName, turn: params.turn ?? 0 },
+  });
 
   const message = await anthropic.messages.create({
     model: params.modelName,
@@ -113,6 +134,20 @@ export async function callModel(
     data: {
       costCents: { increment: costCents },
       lastBeatAt: new Date(),
+    },
+  });
+
+  params.emitEvent?.({
+    type: 'model_call_completed',
+    runId: params.runId,
+    at: new Date().toISOString(),
+    data: {
+      modelCallId: modelCall.id,
+      modelName: params.modelName,
+      inputTokens: message.usage.input_tokens,
+      outputTokens: message.usage.output_tokens,
+      costCents,
+      runCostCents: run.costCents + costCents,
     },
   });
 

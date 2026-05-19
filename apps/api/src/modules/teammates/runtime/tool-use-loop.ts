@@ -9,6 +9,7 @@ import {
 } from './claim-contract';
 import { BudgetExceededError } from './cost';
 import type { AgentTool } from './agent-tool';
+import type { RunEvent } from './run-event-bus';
 
 /**
  * The teammate tool-use loop (T4b.1).
@@ -63,6 +64,12 @@ export interface RunAgentParams {
   anthropic: AnthropicMessagesClient;
   /** Clock override for tests. Defaults to Date.now. */
   now?: () => number;
+  /**
+   * Optional progress callback. The loop forwards to callModel and emits
+   * its own tool_call / draft / terminal events. No-op default keeps
+   * existing call sites working without changes.
+   */
+  emitEvent?: (event: RunEvent) => void;
 }
 
 export interface RunAgentResult {
@@ -100,6 +107,7 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
 
   let toolSeq = 0;
   let toolCallCount = 0;
+  let turn = 0;
 
   while (true) {
     if (toolCallCount >= params.maxToolCalls) {
@@ -108,6 +116,7 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
         params.runId,
         'exceeded_maxToolCalls',
         toolCallCount,
+        params.emitEvent,
       );
     }
     const elapsedSecs = (now() - startedAtMs) / 1000;
@@ -117,6 +126,7 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
         params.runId,
         'exceeded_maxWallSecs',
         toolCallCount,
+        params.emitEvent,
       );
     }
 
@@ -129,6 +139,8 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
         messages,
         tools: anthropicTools,
         budgetCents: params.budgetCents,
+        emitEvent: params.emitEvent,
+        turn,
       });
     } catch (err) {
       if (err instanceof BudgetExceededError) {
@@ -137,10 +149,12 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
           params.runId,
           'exceeded_budget',
           toolCallCount,
+          params.emitEvent,
         );
       }
       throw err;
     }
+    turn++;
 
     const { message, modelCallId } = modelResult;
     messages.push({ role: 'assistant', content: message.content });
@@ -157,6 +171,7 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
         params.runId,
         'no_draft_emitted',
         toolCallCount,
+        params.emitEvent,
       );
     }
 
@@ -189,6 +204,7 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
           teammate: params.teammate,
           runId: params.runId,
           now,
+          emitEvent: params.emitEvent,
         }),
       ),
     );
@@ -205,6 +221,16 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
           status: 'completed',
           completedAt: new Date(),
           outputDraftId: completed.draftId,
+        },
+      });
+      params.emitEvent?.({
+        type: 'run_completed',
+        runId: params.runId,
+        at: new Date().toISOString(),
+        data: {
+          draftId: completed.draftId,
+          costCents: run.costCents,
+          toolCallCount,
         },
       });
       return {
@@ -241,8 +267,20 @@ async function dispatchOneToolUse(params: {
   teammate: string;
   runId: string;
   now: () => number;
+  emitEvent?: (event: RunEvent) => void;
 }): Promise<ToolDispatchOutcome> {
   const { toolUse } = params;
+
+  params.emitEvent?.({
+    type: 'tool_call_started',
+    runId: params.runId,
+    at: new Date().toISOString(),
+    data: {
+      toolName: toolUse.name,
+      toolSeq: params.toolSeq,
+      args: toolUse.input,
+    },
+  });
 
   if (toolUse.name === 'emit_draft') {
     const emitOutcome = await handleEmitDraft({
@@ -253,6 +291,22 @@ async function dispatchOneToolUse(params: {
       toolUse,
       toolSeq: params.toolSeq,
       modelCallId: params.modelCallId,
+      emitEvent: params.emitEvent,
+    });
+    params.emitEvent?.({
+      type: 'tool_call_completed',
+      runId: params.runId,
+      at: new Date().toISOString(),
+      data: {
+        toolName: 'emit_draft',
+        toolSeq: params.toolSeq,
+        durationMs: 0,
+        isError: emitOutcome.status !== 'completed',
+        summary:
+          emitOutcome.status === 'completed'
+            ? `draft ${emitOutcome.draftId}`
+            : emitOutcome.modelMessage.slice(0, 120),
+      },
     });
     if (emitOutcome.status === 'completed') {
       return { kind: 'completed', draftId: emitOutcome.draftId };
@@ -278,6 +332,18 @@ async function dispatchOneToolUse(params: {
       args: toolUse.input,
       result: { error: 'unknown_tool' },
       durationMs: 0,
+    });
+    params.emitEvent?.({
+      type: 'tool_call_completed',
+      runId: params.runId,
+      at: new Date().toISOString(),
+      data: {
+        toolName: toolUse.name,
+        toolSeq: params.toolSeq,
+        durationMs: 0,
+        isError: true,
+        summary: 'unknown_tool',
+      },
     });
     return {
       kind: 'tool_result',
@@ -313,6 +379,18 @@ async function dispatchOneToolUse(params: {
     result,
     durationMs,
   });
+  params.emitEvent?.({
+    type: 'tool_call_completed',
+    runId: params.runId,
+    at: new Date().toISOString(),
+    data: {
+      toolName: toolUse.name,
+      toolSeq: params.toolSeq,
+      durationMs,
+      isError,
+      summary: summarizeToolResult(toolUse.name, result),
+    },
+  });
 
   return {
     kind: 'tool_result',
@@ -323,6 +401,19 @@ async function dispatchOneToolUse(params: {
       is_error: isError,
     },
   };
+}
+
+function summarizeToolResult(toolName: string, result: unknown): string | undefined {
+  if (typeof result !== 'object' || result === null) return undefined;
+  const r = result as Record<string, unknown>;
+  if (toolName === 'brave_search' && Array.isArray(r.results)) {
+    return `${r.results.length} results`;
+  }
+  if (toolName === 'fetch_url' && typeof r.url === 'string') {
+    return `fetched ${r.url}`;
+  }
+  if (typeof r.error === 'string') return `error: ${r.error.slice(0, 100)}`;
+  return undefined;
 }
 
 /**
@@ -338,6 +429,7 @@ async function handleEmitDraft(params: {
   toolUse: Anthropic.ToolUseBlock;
   toolSeq: number;
   modelCallId: string;
+  emitEvent?: (event: RunEvent) => void;
 }): Promise<
   | { status: 'completed'; draftId: string }
   | { status: 'retry'; modelMessage: string }
@@ -378,6 +470,17 @@ async function handleEmitDraft(params: {
       args: parsed.data,
       result: persistResult,
       durationMs: 0,
+    });
+    params.emitEvent?.({
+      type: 'draft_emitted',
+      runId: params.runId,
+      at: new Date().toISOString(),
+      data: {
+        draftId: persistResult.draftId,
+        persistedClaimCount: persistResult.persistedClaimCount,
+        droppedUncitedCount: persistResult.droppedUncitedCount,
+        droppedDanglingCount: persistResult.droppedDanglingCount,
+      },
     });
     return { status: 'completed', draftId: persistResult.draftId };
   } catch (err) {
@@ -435,10 +538,17 @@ async function abortRun(
   runId: string,
   reason: string,
   toolCallCount: number,
+  emitEvent?: (event: RunEvent) => void,
 ): Promise<RunAgentResult> {
   const run = await prisma.agentRun.update({
     where: { id: runId },
     data: { status: 'abstained', reason, completedAt: new Date() },
+  });
+  emitEvent?.({
+    type: 'run_abstained',
+    runId,
+    at: new Date().toISOString(),
+    data: { reason, costCents: run.costCents, toolCallCount },
   });
   return {
     status: 'abstained',
