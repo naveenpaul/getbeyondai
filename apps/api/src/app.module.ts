@@ -8,6 +8,7 @@ import { StorageModule } from './modules/storage/storage.module';
 import { ConnectorsModule } from './modules/connectors/connectors.module';
 import { DraftsModule } from './modules/drafts/drafts.module';
 import { ReapersModule } from './modules/reapers/reapers.module';
+import { TeammatesModule } from './modules/teammates/teammates.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { ReapersModule } from './modules/reapers/reapers.module';
     ConnectorsModule,
     DraftsModule,
     ReapersModule,
+    TeammatesModule,
     // Feature modules land as we implement them:
     //   teammates (runtime + researcher + sdr-drafter + content-drafter)
     //   company-brain, contacts, drafts, fetch, audit, auth, integrations
