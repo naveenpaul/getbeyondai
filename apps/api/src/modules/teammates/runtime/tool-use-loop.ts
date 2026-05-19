@@ -160,103 +160,169 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
       );
     }
 
-    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+    // Parallel dispatch — Claude routinely returns multiple independent
+    // tool_use blocks per turn (e.g. brave_search + 3 fetch_url calls). The
+    // model expects them to run concurrently; serial dispatch would burn
+    // round-trip latency for no reason. Each tool's ToolCall row gets its
+    // toolSeq assigned up front (array index) so the (runId, toolSeq)
+    // unique constraint holds without a races on the autoincrement.
+    //
+    // emit_draft is dispatched in the same parallel batch — it queries the
+    // Citation table at validation time, so any fetch_url Citations from
+    // sibling parallel calls in the same turn are visible (they commit
+    // before emit_draft awaits them). In practice the model only emits
+    // emit_draft when it's done; co-occurrence with other tool_use blocks
+    // is rare but the runtime handles it cleanly either way.
+    const assignedSeqs = toolUses.map((_, i) => toolSeq + i + 1);
+    toolSeq += toolUses.length;
+    toolCallCount += toolUses.length;
 
-    for (const toolUse of toolUses) {
-      toolSeq++;
-      toolCallCount++;
-
-      if (toolUse.name === 'emit_draft') {
-        const emitOutcome = await handleEmitDraft({
+    const outcomes = await Promise.all(
+      toolUses.map((toolUse, i) =>
+        dispatchOneToolUse({
+          toolUse,
+          toolSeq: assignedSeqs[i] as number,
+          modelCallId,
+          toolsByName,
           prisma: params.prisma,
           orgId: params.orgId,
           teammate: params.teammate,
           runId: params.runId,
-          toolUse,
-          toolSeq,
-          modelCallId,
-        });
-        if (emitOutcome.status === 'completed') {
-          const run = await params.prisma.agentRun.update({
-            where: { id: params.runId },
-            data: {
-              status: 'completed',
-              completedAt: new Date(),
-              outputDraftId: emitOutcome.draftId,
-            },
-          });
-          return {
-            status: 'completed',
-            draftId: emitOutcome.draftId,
-            toolCallCount,
-            costCents: run.costCents,
-          };
-        }
-        // model retries — feed the error back
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: emitOutcome.modelMessage,
-          is_error: true,
-        });
-        continue;
-      }
+          now,
+        }),
+      ),
+    );
 
-      // Regular tool dispatch.
-      const tool = toolsByName.get(toolUse.name);
-      if (!tool) {
-        await persistToolCall(params.prisma, {
-          runId: params.runId,
-          toolSeq,
-          modelCallId,
-          toolName: toolUse.name,
-          args: toolUse.input,
-          result: { error: 'unknown_tool' },
-          durationMs: 0,
-        });
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: `Unknown tool: "${toolUse.name}". Available: ${[...toolsByName.keys(), 'emit_draft'].join(', ')}`,
-          is_error: true,
-        });
-        continue;
-      }
-
-      const tStart = now();
-      let result: unknown;
-      let isError = false;
-      try {
-        result = await tool.execute(toolUse.input, {
-          runId: params.runId,
-          orgId: params.orgId,
-          prisma: params.prisma,
-        });
-      } catch (err) {
-        isError = true;
-        result = { error: err instanceof Error ? err.message : String(err) };
-      }
-      const durationMs = now() - tStart;
-      await persistToolCall(params.prisma, {
-        runId: params.runId,
-        toolSeq,
-        modelCallId,
-        toolName: toolUse.name,
-        args: toolUse.input,
-        result,
-        durationMs,
+    // If any tool use was a successful emit_draft, the run is done.
+    // Multiple completed outcomes would only happen if the model called
+    // emit_draft twice in one turn — extremely unusual, but we pick the
+    // first by array order so the choice is deterministic.
+    const completed = outcomes.find((o) => o.kind === 'completed');
+    if (completed && completed.kind === 'completed') {
+      const run = await params.prisma.agentRun.update({
+        where: { id: params.runId },
+        data: {
+          status: 'completed',
+          completedAt: new Date(),
+          outputDraftId: completed.draftId,
+        },
       });
-
-      toolResults.push({
-        type: 'tool_result',
-        tool_use_id: toolUse.id,
-        content: typeof result === 'string' ? result : JSON.stringify(result),
-        is_error: isError,
-      });
+      return {
+        status: 'completed',
+        draftId: completed.draftId,
+        toolCallCount,
+        costCents: run.costCents,
+      };
     }
 
+    // Otherwise feed every tool_result back in the original order.
+    const toolResults: Anthropic.ToolResultBlockParam[] = outcomes.flatMap(
+      (o) => (o.kind === 'tool_result' ? [o.block] : []),
+    );
     messages.push({ role: 'user', content: toolResults });
   }
+}
+
+/**
+ * Outcome of dispatching a single tool_use block. Either the run terminates
+ * (emit_draft succeeded) or we owe the model a tool_result block.
+ */
+type ToolDispatchOutcome =
+  | { kind: 'completed'; draftId: string }
+  | { kind: 'tool_result'; block: Anthropic.ToolResultBlockParam };
+
+async function dispatchOneToolUse(params: {
+  toolUse: Anthropic.ToolUseBlock;
+  toolSeq: number;
+  modelCallId: string;
+  toolsByName: Map<string, AgentTool>;
+  prisma: PrismaClient;
+  orgId: string;
+  teammate: string;
+  runId: string;
+  now: () => number;
+}): Promise<ToolDispatchOutcome> {
+  const { toolUse } = params;
+
+  if (toolUse.name === 'emit_draft') {
+    const emitOutcome = await handleEmitDraft({
+      prisma: params.prisma,
+      orgId: params.orgId,
+      teammate: params.teammate,
+      runId: params.runId,
+      toolUse,
+      toolSeq: params.toolSeq,
+      modelCallId: params.modelCallId,
+    });
+    if (emitOutcome.status === 'completed') {
+      return { kind: 'completed', draftId: emitOutcome.draftId };
+    }
+    return {
+      kind: 'tool_result',
+      block: {
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        content: emitOutcome.modelMessage,
+        is_error: true,
+      },
+    };
+  }
+
+  const tool = params.toolsByName.get(toolUse.name);
+  if (!tool) {
+    await persistToolCall(params.prisma, {
+      runId: params.runId,
+      toolSeq: params.toolSeq,
+      modelCallId: params.modelCallId,
+      toolName: toolUse.name,
+      args: toolUse.input,
+      result: { error: 'unknown_tool' },
+      durationMs: 0,
+    });
+    return {
+      kind: 'tool_result',
+      block: {
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        content: `Unknown tool: "${toolUse.name}". Available: ${[...params.toolsByName.keys(), 'emit_draft'].join(', ')}`,
+        is_error: true,
+      },
+    };
+  }
+
+  const tStart = params.now();
+  let result: unknown;
+  let isError = false;
+  try {
+    result = await tool.execute(toolUse.input, {
+      runId: params.runId,
+      orgId: params.orgId,
+      prisma: params.prisma,
+    });
+  } catch (err) {
+    isError = true;
+    result = { error: err instanceof Error ? err.message : String(err) };
+  }
+  const durationMs = params.now() - tStart;
+  await persistToolCall(params.prisma, {
+    runId: params.runId,
+    toolSeq: params.toolSeq,
+    modelCallId: params.modelCallId,
+    toolName: toolUse.name,
+    args: toolUse.input,
+    result,
+    durationMs,
+  });
+
+  return {
+    kind: 'tool_result',
+    block: {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: typeof result === 'string' ? result : JSON.stringify(result),
+      is_error: isError,
+    },
+  };
 }
 
 /**

@@ -641,6 +641,210 @@ describe('runAgent — claim enforcement', () => {
   });
 });
 
+describe('runAgent — parallel tool dispatch within a turn', () => {
+  it('dispatches multiple tool_use blocks concurrently (Promise.all, not serial)', async () => {
+    const prisma = makeProperFakePrisma(BASE_RUN, [
+      { id: 'cit-1', runId: 'run-1', url: 'x' },
+    ]);
+
+    // Each tool sleeps for the same delay. Serial would take 3*delay; parallel
+    // takes ~1*delay. We test the START times to confirm overlap.
+    const startTimes: number[] = [];
+    const TOOL_DELAY_MS = 30;
+    const slowTool = (name: string): AgentTool => ({
+      name,
+      description: name,
+      inputSchema: { type: 'object' },
+      execute: vi.fn(async () => {
+        startTimes.push(Date.now());
+        await new Promise((r) => setTimeout(r, TOOL_DELAY_MS));
+        return { ok: true };
+      }),
+    });
+    const tools: AgentTool[] = [slowTool('a'), slowTool('b'), slowTool('c')];
+
+    const anthropic = makeAnthropic([
+      // First turn: model emits THREE independent tool_use blocks
+      fakeMessage({
+        content: [
+          toolUseBlock('a', {}, 'tu-a'),
+          toolUseBlock('b', {}, 'tu-b'),
+          toolUseBlock('c', {}, 'tu-c'),
+        ],
+      }),
+      // Second turn: emit_draft
+      fakeMessage({
+        content: [
+          toolUseBlock('emit_draft', {
+            type: 'research_brief',
+            content: { headline: 'x' },
+            claims: [{ text: 't', citationId: 'cit-1' }],
+          }),
+        ],
+      }),
+    ]);
+
+    const wallStart = Date.now();
+    const result = await runAgent({
+      runId: 'run-1',
+      orgId: 'org-A',
+      teammate: 'researcher',
+      modelName: 'claude-sonnet-4-6',
+      systemPrompt: 's',
+      userPrompt: 'u',
+      tools,
+      budgetCents: 100,
+      maxToolCalls: 10,
+      maxWallSecs: 60,
+      prisma: prisma as never,
+      anthropic,
+    });
+    const wallTotal = Date.now() - wallStart;
+
+    expect(result.status).toBe('completed');
+
+    // All three tools started within ~10ms of each other (concurrent),
+    // NOT spaced by TOOL_DELAY_MS each (which would mean serial dispatch).
+    expect(startTimes).toHaveLength(3);
+    const spread = Math.max(...startTimes) - Math.min(...startTimes);
+    expect(spread).toBeLessThan(TOOL_DELAY_MS);
+
+    // Whole run should be well under the serial floor (3 * TOOL_DELAY_MS).
+    // Pad for fake-message overhead. If this fails we regressed to serial.
+    expect(wallTotal).toBeLessThan(3 * TOOL_DELAY_MS);
+  });
+
+  it('assigns toolSeq in array order (deterministic, race-free)', async () => {
+    const prisma = makeProperFakePrisma(BASE_RUN, [
+      { id: 'cit-1', runId: 'run-1', url: 'x' },
+    ]);
+    // Tools resolve in REVERSE order (last is fastest) to prove toolSeq
+    // tracks the array index, not completion order.
+    const tools: AgentTool[] = ['a', 'b', 'c'].map((name, i) => ({
+      name,
+      description: name,
+      inputSchema: { type: 'object' },
+      execute: vi.fn(async () => {
+        await new Promise((r) => setTimeout(r, 30 - i * 10));
+        return { name };
+      }),
+    }));
+
+    const anthropic = makeAnthropic([
+      fakeMessage({
+        content: [
+          toolUseBlock('a', {}, 'tu-a'),
+          toolUseBlock('b', {}, 'tu-b'),
+          toolUseBlock('c', {}, 'tu-c'),
+        ],
+      }),
+      fakeMessage({
+        content: [
+          toolUseBlock('emit_draft', {
+            type: 'research_brief',
+            content: {},
+            claims: [{ text: 't', citationId: 'cit-1' }],
+          }),
+        ],
+      }),
+    ]);
+
+    await runAgent({
+      runId: 'run-1',
+      orgId: 'org-A',
+      teammate: 'researcher',
+      modelName: 'claude-sonnet-4-6',
+      systemPrompt: 's',
+      userPrompt: 'u',
+      tools,
+      budgetCents: 100,
+      maxToolCalls: 10,
+      maxWallSecs: 60,
+      prisma: prisma as never,
+      anthropic,
+    });
+
+    // ToolCalls ordered by toolSeq must match the tool_use array order,
+    // even though c finished first, b second, a last.
+    const calls = prisma._toolCalls
+      .filter((tc) => tc.toolName !== 'emit_draft')
+      .sort((x, y) => x.toolSeq - y.toolSeq);
+    expect(calls.map((c) => c.toolName)).toEqual(['a', 'b', 'c']);
+    // toolSeq monotonic + dense (1, 2, 3) for the first turn.
+    expect(calls.map((c) => c.toolSeq)).toEqual([1, 2, 3]);
+  });
+
+  it('parallel batch with one tool failing: others still complete + run continues', async () => {
+    const prisma = makeProperFakePrisma(BASE_RUN, [
+      { id: 'cit-1', runId: 'run-1', url: 'x' },
+    ]);
+    const tools: AgentTool[] = [
+      {
+        name: 'good_a',
+        description: '',
+        inputSchema: { type: 'object' },
+        execute: vi.fn(async () => ({ ok: true })),
+      },
+      {
+        name: 'flaky',
+        description: '',
+        inputSchema: { type: 'object' },
+        execute: vi.fn(async () => {
+          throw new Error('boom');
+        }),
+      },
+      {
+        name: 'good_b',
+        description: '',
+        inputSchema: { type: 'object' },
+        execute: vi.fn(async () => ({ ok: true })),
+      },
+    ];
+    const anthropic = makeAnthropic([
+      fakeMessage({
+        content: [
+          toolUseBlock('good_a', {}, 'tu-1'),
+          toolUseBlock('flaky', {}, 'tu-2'),
+          toolUseBlock('good_b', {}, 'tu-3'),
+        ],
+      }),
+      fakeMessage({
+        content: [
+          toolUseBlock('emit_draft', {
+            type: 'research_brief',
+            content: {},
+            claims: [{ text: 't', citationId: 'cit-1' }],
+          }),
+        ],
+      }),
+    ]);
+
+    const result = await runAgent({
+      runId: 'run-1',
+      orgId: 'org-A',
+      teammate: 'researcher',
+      modelName: 'claude-sonnet-4-6',
+      systemPrompt: 's',
+      userPrompt: 'u',
+      tools,
+      budgetCents: 100,
+      maxToolCalls: 10,
+      maxWallSecs: 60,
+      prisma: prisma as never,
+      anthropic,
+    });
+    expect(result.status).toBe('completed');
+
+    // All three ToolCall rows persisted (good ones with ok, flaky with the error)
+    const turn1 = prisma._toolCalls.filter((tc) =>
+      ['good_a', 'flaky', 'good_b'].includes(tc.toolName),
+    );
+    expect(turn1).toHaveLength(3);
+    const flaky = turn1.find((tc) => tc.toolName === 'flaky');
+    expect(flaky?.result).toMatchObject({ error: 'boom' });
+  });
+});
+
 describe('runAgent — no draft after turn ends', () => {
   it('model produces text-only response (end_turn) → status=abstained reason=no_draft_emitted', async () => {
     const prisma = makeProperFakePrisma(BASE_RUN);
