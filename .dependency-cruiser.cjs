@@ -34,6 +34,19 @@ module.exports = {
       },
     },
     {
+      name: 'anthropic-sdk-only-in-runtime',
+      severity: 'error',
+      comment:
+        'Architecture invariant #3: every LLM call routes through callModel(). ' +
+        'The Anthropic SDK should live only in apps/api/src/modules/teammates/runtime/. ' +
+        'If a teammate or feature needs to drive Claude differently, extend callModel ' +
+        'rather than importing the SDK directly.',
+      from: {
+        pathNot: '^apps/api/src/modules/teammates/runtime/',
+      },
+      to: { path: '^@anthropic-ai/sdk' },
+    },
+    {
       name: 'no-circular',
       severity: 'error',
       from: {},
