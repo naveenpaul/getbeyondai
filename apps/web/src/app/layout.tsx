@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
+import { UserMenu } from '@/components/UserMenu';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -15,6 +17,17 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="min-h-screen bg-background font-sans antialiased">
+        <header className="border-b border-border/60">
+          <div className="container flex h-12 items-center justify-between">
+            <Link
+              href="/"
+              className="text-sm font-semibold tracking-tight"
+            >
+              getbeyond
+            </Link>
+            <UserMenu />
+          </div>
+        </header>
         {children}
       </body>
     </html>

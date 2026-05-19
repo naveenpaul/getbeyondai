@@ -13,20 +13,18 @@ import {
 import { ResearchRunStream } from '@/components/ResearchRunStream';
 import { ResearchDraftCard } from '@/components/ResearchDraftCard';
 import { ApiError, getResearchRun } from '@/lib/api-client';
-import { env } from '@/lib/env';
+import { useIdentity } from '@/lib/use-identity';
 import { useResearchStream } from '@/lib/use-research-stream';
 
 /**
- * Run detail page (T5.4).
+ * Run detail page (T5.4 → T6.4).
  *
  * Subscribes to the SSE stream to render live progress. Once a terminal
  * event arrives, fires a single GET /runs/:id to fetch the persisted
  * Draft (with claims + citation URLs joined) for inline display.
  *
- * Why both endpoints: the SSE stream emits `draft_emitted` with id +
- * dropped counts, but it doesn't ship the full draft body. Pulling the
- * snapshot once on terminal keeps the SSE event payloads small and
- * gives us the canonical persisted Draft + claims to render.
+ * orgId comes from the session via `useIdentity()` — middleware ensures
+ * /research/** is only reachable after sign-in, so identity is present.
  */
 export default function ResearchRunPage({
   params,
@@ -34,10 +32,12 @@ export default function ResearchRunPage({
   params: Promise<{ runId: string }>;
 }): React.JSX.Element {
   const { runId } = use(params);
+  const { identity } = useIdentity();
+  const orgId = identity?.orgId ?? null;
 
   const { events, connectionState, terminated } = useResearchStream({
-    runId,
-    orgId: env.devOrgId,
+    runId: orgId ? runId : null,
+    orgId: orgId ?? '',
   });
 
   const [snapshot, setSnapshot] = useState<ResearcherRunStatusResponse | null>(
@@ -46,11 +46,11 @@ export default function ResearchRunPage({
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!terminated) return;
+    if (!terminated || !orgId) return;
     let cancelled = false;
     (async () => {
       try {
-        const result = await getResearchRun(runId, env.devOrgId);
+        const result = await getResearchRun(runId, orgId);
         if (!cancelled) setSnapshot(result);
       } catch (err) {
         if (cancelled) return;
@@ -66,7 +66,7 @@ export default function ResearchRunPage({
     return () => {
       cancelled = true;
     };
-  }, [runId, terminated]);
+  }, [runId, terminated, orgId]);
 
   return (
     <main className="container space-y-6 py-12">

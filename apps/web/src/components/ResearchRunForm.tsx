@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ApiError, postResearchRun } from '@/lib/api-client';
-import { env } from '@/lib/env';
+import { useIdentity } from '@/lib/use-identity';
 
 /**
  * The "start a research run" form. POSTs to /run, then router.push to the
@@ -16,19 +16,20 @@ import { env } from '@/lib/env';
  */
 export function ResearchRunForm(): React.JSX.Element {
   const router = useRouter();
+  const { identity, status } = useIdentity();
   const [target, setTarget] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function onSubmit(e: React.FormEvent): Promise<void> {
     e.preventDefault();
-    if (submitting || !target.trim()) return;
+    if (submitting || !target.trim() || !identity) return;
     setSubmitting(true);
     setError(null);
     try {
       const { runId } = await postResearchRun({
-        orgId: env.devOrgId,
-        triggeredBy: env.devUserId,
+        orgId: identity.orgId,
+        triggeredBy: identity.userId,
         target: target.trim(),
       });
       router.push(`/research/${encodeURIComponent(runId)}`);
@@ -43,6 +44,10 @@ export function ResearchRunForm(): React.JSX.Element {
       setError(msg);
     }
   }
+
+  // Identity still resolving — disable submit but render the form so the
+  // page doesn't flash empty.
+  const identityReady = status === 'authenticated' || status === 'fallback';
 
   return (
     <Card className="mx-auto max-w-2xl">
@@ -80,7 +85,10 @@ export function ResearchRunForm(): React.JSX.Element {
           ) : null}
 
           <div className="flex justify-end">
-            <Button type="submit" disabled={submitting || !target.trim()}>
+            <Button
+              type="submit"
+              disabled={submitting || !target.trim() || !identityReady}
+            >
               {submitting ? (
                 <>
                   <Loader2 className="animate-spin" /> Starting…

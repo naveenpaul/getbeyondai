@@ -40,6 +40,9 @@ export async function postResearchRun(
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
+    // Session cookie rides along on every API call; CORS is configured to
+    // allow credentials on the API side (CORS_ORIGIN env var).
+    credentials: 'include',
   });
   if (!response.ok) await readError(response);
   return response.json() as Promise<ResearcherRunEnqueueResponse>;
@@ -53,7 +56,7 @@ export async function getResearchRun(
     `${env.apiUrl}/teammates/researcher/runs/${encodeURIComponent(runId)}`,
   );
   url.searchParams.set('orgId', orgId);
-  const response = await fetch(url.toString());
+  const response = await fetch(url.toString(), { credentials: 'include' });
   if (!response.ok) await readError(response);
   return response.json() as Promise<ResearcherRunStatusResponse>;
 }

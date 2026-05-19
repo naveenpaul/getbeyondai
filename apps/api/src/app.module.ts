@@ -5,6 +5,7 @@ import { PrismaModule } from './common/prisma/prisma.module';
 import { OrgContextModule } from './common/org-context/org-context.module';
 import { QueueModule } from './modules/queue/queue.module';
 import { StorageModule } from './modules/storage/storage.module';
+import { AuthModule } from './modules/auth/auth.module';
 import { ConnectorsModule } from './modules/connectors/connectors.module';
 import { DraftsModule } from './modules/drafts/drafts.module';
 import { ReapersModule } from './modules/reapers/reapers.module';
@@ -20,6 +21,7 @@ import { TeammatesModule } from './modules/teammates/teammates.module';
     PrismaModule,
     QueueModule,
     StorageModule,
+    AuthModule,
     ConnectorsModule,
     DraftsModule,
     ReapersModule,

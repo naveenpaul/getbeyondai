@@ -1,23 +1,26 @@
 /**
- * Public env config (T5.3).
+ * Public env config (T5.3 → T6.4).
  *
  * Only NEXT_PUBLIC_* vars are accessible from browser code. They get baked
  * in at build time, so each value lives here once with explicit fallbacks.
- * Missing values throw at module load so we fail fast on misconfiguration
- * rather than at the first API call.
+ *
+ * Real auth (better-auth, T6) provides orgId + userId via the session
+ * cookie. The legacy NEXT_PUBLIC_DEV_ORG_ID / NEXT_PUBLIC_DEV_USER_ID env
+ * vars are kept as OPTIONAL fallbacks so the existing seed-dev path keeps
+ * working until everyone migrates to logging in, but they're no longer
+ * required at module load.
  */
 
-function readPublic(name: string, fallback?: string): string {
+function readPublic(name: string, fallback: string): string {
   const value = process.env[name];
   if (value !== undefined && value !== '') return value;
-  if (fallback !== undefined) return fallback;
-  throw new Error(
-    `${name} is not set. Copy apps/web/.env.example to .env.local and fill it in.`,
-  );
+  return fallback;
 }
 
 export const env = {
   apiUrl: readPublic('NEXT_PUBLIC_API_URL', 'http://localhost:3000'),
-  devOrgId: readPublic('NEXT_PUBLIC_DEV_ORG_ID'),
-  devUserId: readPublic('NEXT_PUBLIC_DEV_USER_ID', 'usr_dev'),
+  /** Legacy: empty string means "no fallback, use session". */
+  devOrgId: readPublic('NEXT_PUBLIC_DEV_ORG_ID', ''),
+  /** Legacy: empty string means "no fallback, use session". */
+  devUserId: readPublic('NEXT_PUBLIC_DEV_USER_ID', ''),
 };

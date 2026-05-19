@@ -13,6 +13,7 @@
   "dependencies": {
     "@getbeyond/shared": "workspace:*",
     "@radix-ui/react-slot": "^1.1.0",
+    "better-auth": "^1.6.11",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "lucide-react": "^0.451.0",

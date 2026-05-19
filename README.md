@@ -44,7 +44,8 @@ cd getbeyond
 # Configure
 cp .env.example .env
 # Edit .env — fill ANTHROPIC_API_KEY, BRAVE_SEARCH_API_KEY,
-# CREDENTIAL_MASTER_KEY (openssl rand -base64 32), CORS_ORIGIN, etc.
+# CREDENTIAL_MASTER_KEY + AUTH_SECRET (each: openssl rand -base64 32),
+# CORS_ORIGIN, etc.
 
 # Bring up Postgres + MinIO
 docker compose up -d
@@ -53,16 +54,23 @@ docker compose up -d
 pnpm install
 pnpm --filter @getbeyond/api prisma:migrate
 
-# Seed a dev Org + User; copy the printed IDs into apps/web/.env.local
+# Optional: pre-create a dev Org so you can run a research session
+# without the magic-link flow (useful for the test-keys flow).
 cp apps/web/.env.example apps/web/.env.local
-pnpm --filter @getbeyond/api seed:dev
+pnpm --filter @getbeyond/api seed:dev   # paste IDs into apps/web/.env.local
 
 # Run the API + the web client (turbo runs both in watch mode)
 pnpm dev
 ```
 
-API listens on `:3000`. Web client on `:3001`. Open
-`http://localhost:3001` and click "Try the Researcher".
+API on `:3000`. Web on `:3001`.
+
+**Sign in**: open `http://localhost:3001`, click "Try the Researcher", enter
+your email, click "Send magic link". In dev the link prints to the API
+process stdout — click it from there. First-time sign-in auto-creates an
+Organization for your account. (Skip the magic-link step if you set the
+`NEXT_PUBLIC_DEV_*` env vars from `seed:dev` — the legacy fallback path
+still works for quick smoke tests.)
 
 ## One-click deploy to a server
 

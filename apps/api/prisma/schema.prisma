@@ -58,19 +58,86 @@ model Organization {
 }
 
 model User {
+  id            String   @id @default(cuid())
+  orgId         String
+  email         String   @db.Citext
+  emailVerified Boolean  @default(false)
+  name          String?
+  image         String?
+  role          UserRole @default(member)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  org      Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  voices   Voice[]
+  sessions Session[]
+  accounts Account[]
+
+  @@unique([orgId, email])
+  @@unique([email]) // better-auth's prismaAdapter looks up users by email globally
+  @@map("users")
+}
+
+// ============================================================================
+// Auth — better-auth tables (T6.1)
+//
+// Schema shapes match what better-auth's prismaAdapter expects. See
+// https://www.better-auth.com/docs/concepts/database for the canonical
+// field list. Our User row carries the orgId + role on top of better-auth's
+// minimum surface — set atomically via the user.create.before hook in
+// `apps/api/src/modules/auth/auth.config.ts` so orgId can stay NOT NULL.
+// ============================================================================
+
+model Session {
   id        String   @id @default(cuid())
-  orgId     String
-  email     String   @db.Citext
-  role      UserRole @default(member)
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?  @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  org    Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  voices Voice[]
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([orgId, email])
-  @@index([email])
-  @@map("users")
+  @@index([userId])
+  @@index([expiresAt]) // reaper sweep
+  @@map("sessions")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  userId                String
+  accountId             String // vendor's id (email for magic-link, OAuth subject for Google, etc.)
+  providerId            String // 'magic-link' | 'google' | 'github' | …
+  accessToken           String?   @db.Text
+  refreshToken          String?   @db.Text
+  idToken               String?   @db.Text
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?   @db.Text // bcrypted; null for non-credential providers
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String // typically email
+  value      String   @db.Text // the token / magic-link payload
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@index([expiresAt]) // reaper sweep
+  @@map("verifications")
 }
 
 // ============================================================================
