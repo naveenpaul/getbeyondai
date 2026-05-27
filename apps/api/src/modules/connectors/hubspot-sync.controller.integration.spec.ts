@@ -106,7 +106,7 @@ describe.skipIf(!DATABASE_URL)(
           contact_sources, contact_emails, contact_list_members, contact_lists,
           contacts, sync_runs, oauth_states, connector_accounts,
           tool_calls, model_calls, citations, agent_runs,
-          voices, company_brains, sessions, accounts, verifications,
+          voices, company_brains, sessions, accounts, verifications, org_memberships,
           users, organizations
         RESTART IDENTITY CASCADE
       `);

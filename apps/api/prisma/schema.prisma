@@ -45,7 +45,8 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users             User[]
+  memberships       OrgMembership[]
+  activeForUsers    User[]             @relation("UserActiveOrg")
   companyBrain      CompanyBrain?
   agentRuns         AgentRun[]
   drafts            Draft[]
@@ -57,23 +58,43 @@ model Organization {
   @@map("organizations")
 }
 
+// One user can belong to many organizations. The (userId, orgId) pair carries
+// the role for that org — replaces the old User.role singleton.
+model OrgMembership {
+  id        String   @id @default(cuid())
+  userId    String
+  orgId     String
+  role      UserRole @default(member)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, orgId])
+  @@index([orgId])
+  @@map("org_memberships")
+}
+
 model User {
   id            String   @id @default(cuid())
-  orgId         String
+  // The org the user is currently acting in. AuthGuard verifies a matching
+  // OrgMembership exists before trusting this on each request. Multi-org users
+  // flip this via POST /me/active-org.
+  activeOrgId   String
   email         String   @db.Citext
   emailVerified Boolean  @default(false)
   name          String?
   image         String?
-  role          UserRole @default(member)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  org      Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  voices   Voice[]
-  sessions Session[]
-  accounts Account[]
+  activeOrg   Organization    @relation("UserActiveOrg", fields: [activeOrgId], references: [id], onDelete: Cascade)
+  memberships OrgMembership[]
+  voices      Voice[]
+  sessions    Session[]
+  accounts    Account[]
 
-  @@unique([orgId, email])
   @@unique([email]) // better-auth's prismaAdapter looks up users by email globally
   @@map("users")
 }
@@ -83,9 +104,10 @@ model User {
 //
 // Schema shapes match what better-auth's prismaAdapter expects. See
 // https://www.better-auth.com/docs/concepts/database for the canonical
-// field list. Our User row carries the orgId + role on top of better-auth's
-// minimum surface — set atomically via the user.create.before hook in
-// `apps/api/src/modules/auth/auth.config.ts` so orgId can stay NOT NULL.
+// field list. Our User row carries activeOrgId on top of better-auth's
+// minimum surface — set atomically via the user.create.before hook + an
+// OrgMembership row written by user.create.after in
+// `apps/api/src/modules/auth/auth.config.ts` so activeOrgId can stay NOT NULL.
 // ============================================================================
 
 model Session {

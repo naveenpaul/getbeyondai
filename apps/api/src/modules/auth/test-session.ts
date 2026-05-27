@@ -92,5 +92,5 @@ export async function createTestSession(
     throw new Error(`createTestSession: User row not found for ${email}`);
   }
 
-  return { cookie, userId: user.id, orgId: user.orgId };
+  return { cookie, userId: user.id, orgId: user.activeOrgId };
 }

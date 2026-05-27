@@ -34,13 +34,13 @@ export function useIdentity(): IdentityState {
       id: string;
       email?: string | null;
       name?: string | null;
-      orgId?: string;
+      activeOrgId?: string;
     };
-    if (user.orgId) {
+    if (user.activeOrgId) {
       return {
         status: 'authenticated',
         identity: {
-          orgId: user.orgId,
+          orgId: user.activeOrgId,
           userId: user.id,
           email: user.email ?? null,
           name: user.name ?? null,

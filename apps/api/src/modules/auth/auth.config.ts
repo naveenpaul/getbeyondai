@@ -108,8 +108,9 @@ export function createAuth(prisma: PrismaClient) {
     },
     user: {
       additionalFields: {
-        orgId: { type: 'string', required: true, input: false },
-        role: { type: 'string', required: false, input: false },
+        // activeOrgId rides on the session user. AuthGuard verifies a
+        // matching OrgMembership exists each request before trusting it.
+        activeOrgId: { type: 'string', required: true, input: false },
       },
     },
     emailAndPassword: { enabled: false },
@@ -125,10 +126,10 @@ export function createAuth(prisma: PrismaClient) {
       user: {
         create: {
           before: async (user) => {
-            // First-time signup: create an Org + attach the user as owner.
-            // Runs INSIDE better-auth's create transaction when the adapter
-            // is configured with `transaction: true`, so a hook failure
-            // rolls back the User insert too.
+            // First-time signup: create an Org. The matching OrgMembership
+            // row is written in the `after` hook once the User row's id
+            // exists. better-auth's prisma adapter runs the create flow in
+            // a transaction so a hook failure rolls everything back.
             const email =
               (user as { email?: string } | undefined)?.email ?? 'unknown';
             const org = await prisma.organization.create({
@@ -137,10 +138,19 @@ export function createAuth(prisma: PrismaClient) {
             return {
               data: {
                 ...user,
-                orgId: org.id,
-                role: 'owner',
+                activeOrgId: org.id,
               },
             };
+          },
+          after: async (user) => {
+            // Pair the user with their org via OrgMembership. Role defaults
+            // to 'owner' for the first user of a new org. Chunk B (invites)
+            // will detour this path: an invited user gets a membership in
+            // the inviting org with the invite's role instead.
+            const u = user as unknown as { id: string; activeOrgId: string };
+            await prisma.orgMembership.create({
+              data: { userId: u.id, orgId: u.activeOrgId, role: 'owner' },
+            });
           },
         },
       },

@@ -11,16 +11,17 @@ import { createAuth } from './auth.config';
 import type { CurrentUserPayload } from './current-user.decorator';
 
 /**
- * Session-based auth guard (T7.1).
+ * Session-based auth guard.
  *
- * Reads the session cookie from the incoming Fastify request, calls
- * better-auth's `auth.api.getSession({ headers })` to validate + load the
- * user, and attaches the resolved identity (`userId`, `orgId`, `email`,
- * `role`) to the request as `req.user`.
+ * Reads the session cookie, calls better-auth's `getSession`, then verifies
+ * the user still has an OrgMembership for their current activeOrgId before
+ * attaching `{ userId, orgId, email, role }` to the request. The membership
+ * lookup is the trust boundary: a stale session whose org the user has been
+ * removed from is rejected here, not later in business logic.
  *
- * Throws 401 when no session is present or the cookie is invalid. Routes
- * that need to be reachable anonymously (the auth handler itself, health
- * checks) simply don't apply this guard at the controller level.
+ * Throws 401 when no session is present, the cookie is invalid, or no
+ * matching membership exists. Routes that need to be reachable anonymously
+ * (the auth handler itself, health checks) simply don't apply this guard.
  *
  * Why not a global guard via APP_GUARD: applying it globally would also
  * block /api/auth/sign-in/magic-link before better-auth ever sees it.
@@ -58,23 +59,35 @@ export class AuthGuard implements CanActivate {
     const user = result.user as {
       id: string;
       email: string;
-      orgId?: string;
-      role?: string | null;
+      activeOrgId?: string;
     };
-    if (!user.orgId) {
-      // Should be impossible — the user.create.before hook always sets
-      // orgId. Surface as 500 territory (UnauthorizedException is close
-      // enough for the client; the API logs reveal the underlying issue).
+    if (!user.activeOrgId) {
+      // The user.create hooks set activeOrgId atomically with the row.
+      // A missing value means the session predates this migration — force
+      // a fresh sign-in.
       throw new UnauthorizedException(
-        'Session user has no orgId — re-sign-in',
+        'Session is missing an active org — sign in again',
+      );
+    }
+
+    const membership = await this.prisma.orgMembership.findUnique({
+      where: { userId_orgId: { userId: user.id, orgId: user.activeOrgId } },
+      select: { role: true },
+    });
+    if (!membership) {
+      // The user no longer belongs to their active org (revoked or org
+      // deleted). Reject the request — the client should re-fetch /me and
+      // either pick another org or sign out.
+      throw new UnauthorizedException(
+        'No membership for the active org — switch orgs or sign in again',
       );
     }
 
     const payload: CurrentUserPayload = {
       userId: user.id,
-      orgId: user.orgId,
+      orgId: user.activeOrgId,
       email: user.email,
-      role: user.role ?? null,
+      role: membership.role,
     };
     (req as FastifyRequest & { user?: CurrentUserPayload }).user = payload;
     return true;

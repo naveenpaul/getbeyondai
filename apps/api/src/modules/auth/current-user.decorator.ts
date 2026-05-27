@@ -8,16 +8,15 @@ import type { FastifyRequest } from 'fastify';
 /**
  * Resolved identity attached to the request by AuthGuard.
  *
- * Always carries `orgId` (the additional field on User from better-auth's
- * config). `userId` is the better-auth user.id which matches our User.id
- * primary key.
+ * `orgId` is the user's *active* org for this request — AuthGuard verifies a
+ * matching OrgMembership exists before populating this. `role` is the role
+ * the user holds in that specific org.
  */
 export interface CurrentUserPayload {
   userId: string;
   orgId: string;
   email: string;
-  /** Owner | member. May be null on the rare older row that predates the field. */
-  role: string | null;
+  role: 'owner' | 'member';
 }
 
 /**
