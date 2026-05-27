@@ -16,7 +16,7 @@ export interface CurrentUserPayload {
   userId: string;
   orgId: string;
   email: string;
-  role: 'owner' | 'member';
+  role: 'owner' | 'admin' | 'member';
 }
 
 /**

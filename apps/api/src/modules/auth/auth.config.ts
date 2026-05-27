@@ -126,28 +126,72 @@ export function createAuth(prisma: PrismaClient) {
       user: {
         create: {
           before: async (user) => {
-            // First-time signup: create an Org. The matching OrgMembership
-            // row is written in the `after` hook once the User row's id
-            // exists. better-auth's prisma adapter runs the create flow in
-            // a transaction so a hook failure rolls everything back.
+            // Signup paths:
+            //   1. Invited: a pending Invite exists for this email — attach
+            //      to the inviting org as the invited role. No new org.
+            //   2. Fresh: create a new org and become its owner.
+            // The matching OrgMembership row + invite acceptance happen in
+            // `after` once the User row's id exists. better-auth's prisma
+            // adapter runs create in a transaction so a hook failure rolls
+            // everything back.
             const email =
               (user as { email?: string } | undefined)?.email ?? 'unknown';
+
+            const pendingInvite = await prisma.invite.findFirst({
+              where: {
+                email,
+                acceptedAt: null,
+                revokedAt: null,
+                expiresAt: { gt: new Date() },
+              },
+              orderBy: { createdAt: 'desc' },
+            });
+
+            if (pendingInvite) {
+              return { data: { ...user, activeOrgId: pendingInvite.orgId } };
+            }
+
             const org = await prisma.organization.create({
               data: { name: deriveOrgName(email) },
             });
-            return {
-              data: {
-                ...user,
-                activeOrgId: org.id,
-              },
-            };
+            return { data: { ...user, activeOrgId: org.id } };
           },
           after: async (user) => {
-            // Pair the user with their org via OrgMembership. Role defaults
-            // to 'owner' for the first user of a new org. Chunk B (invites)
-            // will detour this path: an invited user gets a membership in
-            // the inviting org with the invite's role instead.
-            const u = user as unknown as { id: string; activeOrgId: string };
+            // Pair the user with their org via OrgMembership. If an invite
+            // is pending for this email AND points at the user's active
+            // org, accept it and use the invite's role. Otherwise this is
+            // a fresh signup → role='owner'.
+            const u = user as unknown as {
+              id: string;
+              email: string;
+              activeOrgId: string;
+            };
+            const pendingInvite = await prisma.invite.findFirst({
+              where: {
+                email: u.email,
+                orgId: u.activeOrgId,
+                acceptedAt: null,
+                revokedAt: null,
+                expiresAt: { gt: new Date() },
+              },
+              orderBy: { createdAt: 'desc' },
+            });
+            if (pendingInvite) {
+              await prisma.$transaction([
+                prisma.orgMembership.create({
+                  data: {
+                    userId: u.id,
+                    orgId: u.activeOrgId,
+                    role: pendingInvite.role,
+                  },
+                }),
+                prisma.invite.update({
+                  where: { id: pendingInvite.id },
+                  data: { acceptedAt: new Date(), acceptedByUserId: u.id },
+                }),
+              ]);
+              return;
+            }
             await prisma.orgMembership.create({
               data: { userId: u.id, orgId: u.activeOrgId, role: 'owner' },
             });

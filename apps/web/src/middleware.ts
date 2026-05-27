@@ -21,6 +21,9 @@ function isPublic(pathname: string): boolean {
   if (PUBLIC_PATHS.has(pathname)) return true;
   // Auth handler routes are public — they ARE the sign-in flow.
   if (pathname.startsWith('/api/auth')) return true;
+  // Invite landing — the lookup endpoint is public; the Accept action on
+  // that page bounces the user through /login if they're not signed in.
+  if (pathname.startsWith('/invite/')) return true;
   // Next internals.
   if (pathname.startsWith('/_next')) return true;
   if (pathname === '/favicon.ico') return true;

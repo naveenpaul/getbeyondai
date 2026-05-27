@@ -31,7 +31,11 @@ interface MeResponse {
   userId: string;
   email: string;
   activeOrgId: string;
-  orgs: Array<{ id: string; name: string | null; role: 'owner' | 'member' }>;
+  orgs: Array<{
+    id: string;
+    name: string | null;
+    role: 'owner' | 'admin' | 'member';
+  }>;
 }
 
 @Controller('me')

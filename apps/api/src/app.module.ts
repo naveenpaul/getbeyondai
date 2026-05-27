@@ -8,6 +8,7 @@ import { StorageModule } from './modules/storage/storage.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ConnectorsModule } from './modules/connectors/connectors.module';
 import { DraftsModule } from './modules/drafts/drafts.module';
+import { InvitesModule } from './modules/invites/invites.module';
 import { ReapersModule } from './modules/reapers/reapers.module';
 import { TeammatesModule } from './modules/teammates/teammates.module';
 
@@ -24,6 +25,7 @@ import { TeammatesModule } from './modules/teammates/teammates.module';
     AuthModule,
     ConnectorsModule,
     DraftsModule,
+    InvitesModule,
     ReapersModule,
     TeammatesModule,
     // Feature modules land as we implement them:

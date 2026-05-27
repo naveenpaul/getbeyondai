@@ -35,6 +35,7 @@ enum Plan {
 
 enum UserRole {
   owner
+  admin
   member
 }
 
@@ -47,6 +48,7 @@ model Organization {
 
   memberships       OrgMembership[]
   activeForUsers    User[]             @relation("UserActiveOrg")
+  invites           Invite[]
   companyBrain      CompanyBrain?
   agentRuns         AgentRun[]
   drafts            Draft[]
@@ -89,14 +91,43 @@ model User {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  activeOrg   Organization    @relation("UserActiveOrg", fields: [activeOrgId], references: [id], onDelete: Cascade)
-  memberships OrgMembership[]
-  voices      Voice[]
-  sessions    Session[]
-  accounts    Account[]
+  activeOrg       Organization    @relation("UserActiveOrg", fields: [activeOrgId], references: [id], onDelete: Cascade)
+  memberships     OrgMembership[]
+  invitesSent     Invite[]        @relation("InvitedBy")
+  invitesAccepted Invite[]        @relation("InviteAcceptedBy")
+  voices          Voice[]
+  sessions        Session[]
+  accounts        Account[]
 
   @@unique([email]) // better-auth's prismaAdapter looks up users by email globally
   @@map("users")
+}
+
+// Pending or accepted invitation to join an org. Tokens are 32-byte random
+// base64url. We allow at most one open invite per (orgId, email) — re-inviting
+// the same address either renews the existing row or replaces it.
+model Invite {
+  id               String    @id @default(cuid())
+  orgId            String
+  email            String    @db.Citext
+  role             UserRole  @default(member)
+  token            String    @unique
+  expiresAt        DateTime
+  invitedByUserId  String
+  acceptedAt       DateTime?
+  acceptedByUserId String?
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  org        Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  invitedBy  User         @relation("InvitedBy", fields: [invitedByUserId], references: [id], onDelete: Cascade)
+  acceptedBy User?        @relation("InviteAcceptedBy", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([orgId, email]) // only one outstanding invite per address per org
+  @@index([email]) // signup hook looks up pending invites by email
+  @@index([orgId])
+  @@map("invites")
 }
 
 // ============================================================================
