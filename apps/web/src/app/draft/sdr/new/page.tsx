@@ -47,7 +47,7 @@ function SdrDrafterForm(): React.JSX.Element {
   const params = useSearchParams();
   const briefDraftId = params.get('brief') ?? '';
 
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(params.get('email') ?? '');
   const [goal, setGoal] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);

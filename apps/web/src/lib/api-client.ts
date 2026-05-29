@@ -85,6 +85,137 @@ export async function lookupContactByEmail(
   return res.json() as Promise<ContactLookupResponse>;
 }
 
+// ─── Contacts list ────────────────────────────────────────────────────────
+
+export interface ContactListItem {
+  id: string;
+  primaryEmail: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  title: string | null;
+  company: string | null;
+  linkedinUrl: string | null;
+  updatedAt: string;
+}
+
+export interface ContactListResponse {
+  items: ContactListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export async function listContacts(params?: {
+  q?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<ContactListResponse> {
+  const url = new URL(`${env.apiUrl}/contacts`);
+  if (params?.q) url.searchParams.set('q', params.q);
+  if (params?.limit !== undefined)
+    url.searchParams.set('limit', String(params.limit));
+  if (params?.offset !== undefined)
+    url.searchParams.set('offset', String(params.offset));
+  const res = await fetch(url.toString(), { credentials: 'include' });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<ContactListResponse>;
+}
+
+// ─── Drafts inbox ─────────────────────────────────────────────────────────
+
+export type DraftStatus =
+  | 'pending'
+  | 'approved'
+  | 'rejected'
+  | 'edited'
+  | 'sent'
+  | 'partial'
+  | 'failed';
+
+export type DraftType =
+  | 'email'
+  | 'linkedin_dm'
+  | 'linkedin_post'
+  | 'twitter_post'
+  | 'research_brief';
+
+export interface DraftListItem {
+  id: string;
+  teammate: string;
+  type: DraftType;
+  status: DraftStatus;
+  recipient: unknown;
+  contentPreview: string;
+  runId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DraftListResponse {
+  items: DraftListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface DraftDetailClaim {
+  id: string;
+  text: string;
+  abstained: boolean;
+  confidence: number | null;
+  citation: {
+    id: string;
+    url: string;
+    title: string | null;
+    excerpt: string | null;
+  } | null;
+}
+
+export interface DraftDetailResponse {
+  id: string;
+  teammate: string;
+  type: DraftType;
+  status: DraftStatus;
+  recipient: unknown;
+  content: unknown;
+  runId: string | null;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  scheduledFor: string | null;
+  postedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  claims: DraftDetailClaim[];
+}
+
+export async function listDrafts(params?: {
+  status?: DraftStatus;
+  teammate?: string;
+  type?: DraftType;
+  limit?: number;
+  offset?: number;
+}): Promise<DraftListResponse> {
+  const url = new URL(`${env.apiUrl}/drafts`);
+  if (params?.status) url.searchParams.set('status', params.status);
+  if (params?.teammate) url.searchParams.set('teammate', params.teammate);
+  if (params?.type) url.searchParams.set('type', params.type);
+  if (params?.limit !== undefined)
+    url.searchParams.set('limit', String(params.limit));
+  if (params?.offset !== undefined)
+    url.searchParams.set('offset', String(params.offset));
+  const res = await fetch(url.toString(), { credentials: 'include' });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<DraftListResponse>;
+}
+
+export async function getDraft(id: string): Promise<DraftDetailResponse> {
+  const res = await fetch(`${env.apiUrl}/drafts/${encodeURIComponent(id)}`, {
+    credentials: 'include',
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<DraftDetailResponse>;
+}
+
 export async function postSdrDrafterRun(
   payload: SdrDrafterRunRequest,
 ): Promise<SdrDrafterRunEnqueueResponse> {

@@ -168,4 +168,176 @@ describe.skipIf(!DATABASE_URL)('GET /contacts/lookup', () => {
     });
     expect(res.statusCode).toBe(401);
   });
+
+  describe('GET /contacts (list)', () => {
+    it('returns paged contacts for the caller org, newest first', async () => {
+      await prisma.contact.createMany({
+        data: [
+          {
+            orgId: alice.orgId,
+            firstName: 'Sarah',
+            lastName: 'Patel',
+            normalizedEmail: 'sarah@acme.com',
+            title: 'VP Sales',
+            company: 'Acme',
+          },
+          {
+            orgId: alice.orgId,
+            firstName: 'Tom',
+            normalizedEmail: 'tom@beta.com',
+            company: 'Beta',
+          },
+          {
+            orgId: alice.orgId,
+            firstName: 'Lin',
+            normalizedEmail: 'lin@gamma.com',
+            company: 'Gamma',
+          },
+        ],
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/contacts',
+        headers: { cookie: alice.cookie },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as {
+        items: Array<{ firstName: string | null }>;
+        total: number;
+        limit: number;
+        offset: number;
+      };
+      expect(body.total).toBe(3);
+      expect(body.limit).toBe(50);
+      expect(body.offset).toBe(0);
+      expect(body.items).toHaveLength(3);
+      // No timestamps were forced apart, but the sort key is updatedAt then
+      // id — all three are present.
+      expect(body.items.map((c) => c.firstName).sort()).toEqual([
+        'Lin',
+        'Sarah',
+        'Tom',
+      ]);
+    });
+
+    it('respects limit + offset', async () => {
+      for (let i = 0; i < 5; i += 1) {
+        await prisma.contact.create({
+          data: {
+            orgId: alice.orgId,
+            firstName: `Contact${i}`,
+            normalizedEmail: `c${i}@test.com`,
+          },
+        });
+      }
+
+      const page1 = await app.inject({
+        method: 'GET',
+        url: '/contacts?limit=2&offset=0',
+        headers: { cookie: alice.cookie },
+      });
+      const page2 = await app.inject({
+        method: 'GET',
+        url: '/contacts?limit=2&offset=2',
+        headers: { cookie: alice.cookie },
+      });
+      const body1 = page1.json() as { items: unknown[]; total: number };
+      const body2 = page2.json() as { items: unknown[]; total: number };
+
+      expect(body1.total).toBe(5);
+      expect(body1.items).toHaveLength(2);
+      expect(body2.items).toHaveLength(2);
+    });
+
+    it('clamps limit at the 100 ceiling', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/contacts?limit=9999',
+        headers: { cookie: alice.cookie },
+      });
+      const body = res.json() as { limit: number };
+      expect(body.limit).toBe(100);
+    });
+
+    it('falls back to defaults on malformed limit/offset', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/contacts?limit=NaN&offset=foo',
+        headers: { cookie: alice.cookie },
+      });
+      const body = res.json() as { limit: number; offset: number };
+      expect(body.limit).toBe(50);
+      expect(body.offset).toBe(0);
+    });
+
+    it('filters by q across name + email + company (case-insensitive)', async () => {
+      await prisma.contact.createMany({
+        data: [
+          {
+            orgId: alice.orgId,
+            firstName: 'Sarah',
+            normalizedEmail: 'sarah@acme.com',
+            company: 'Acme',
+          },
+          {
+            orgId: alice.orgId,
+            firstName: 'Tom',
+            normalizedEmail: 'tom@beta.com',
+            company: 'Beta',
+          },
+        ],
+      });
+
+      const byName = await app.inject({
+        method: 'GET',
+        url: '/contacts?q=SaR',
+        headers: { cookie: alice.cookie },
+      });
+      const nameBody = byName.json() as {
+        items: Array<{ firstName: string | null }>;
+      };
+      expect(nameBody.items).toHaveLength(1);
+      expect(nameBody.items[0]?.firstName).toBe('Sarah');
+
+      const byCompany = await app.inject({
+        method: 'GET',
+        url: '/contacts?q=beta',
+        headers: { cookie: alice.cookie },
+      });
+      const companyBody = byCompany.json() as {
+        items: Array<{ company: string | null }>;
+      };
+      expect(companyBody.items).toHaveLength(1);
+      expect(companyBody.items[0]?.company).toBe('Beta');
+    });
+
+    it('excludes contacts owned by other orgs', async () => {
+      const bob = await createTestSession(prisma, auth, 'bob@test.com');
+      await prisma.contact.create({
+        data: {
+          orgId: bob.orgId,
+          firstName: 'BobLead',
+          normalizedEmail: 'lead@bobcorp.com',
+        },
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/contacts',
+        headers: { cookie: alice.cookie },
+      });
+      const body = res.json() as {
+        items: Array<{ firstName: string | null }>;
+        total: number;
+      };
+      expect(body.total).toBe(0);
+      expect(body.items).toHaveLength(0);
+    });
+
+    it('returns 401 without a session cookie', async () => {
+      const res = await app.inject({ method: 'GET', url: '/contacts' });
+      expect(res.statusCode).toBe(401);
+    });
+  });
 });

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,8 +16,9 @@ import { useIdentity } from '@/lib/use-identity';
  */
 export function ResearchRunForm(): React.JSX.Element {
   const router = useRouter();
+  const params = useSearchParams();
   const { status } = useIdentity();
-  const [target, setTarget] = useState('');
+  const [target, setTarget] = useState(params.get('target') ?? '');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
