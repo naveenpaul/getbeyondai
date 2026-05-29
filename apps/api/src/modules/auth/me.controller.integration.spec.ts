@@ -23,7 +23,7 @@ const DATABASE_URL = process.env.DATABASE_URL;
 describe.skipIf(!DATABASE_URL)('GET /me + POST /me/active-org', () => {
   let app: NestFastifyApplication;
   let prisma: PrismaClient;
-  let auth: ReturnType<typeof createAuth>;
+  let auth: Awaited<ReturnType<typeof createAuth>>;
   let alice: { cookie: string; userId: string; orgId: string };
 
   beforeAll(async () => {
@@ -34,12 +34,12 @@ describe.skipIf(!DATABASE_URL)('GET /me + POST /me/active-org', () => {
       );
     }
 
-    process.env.CREDENTIAL_MASTER_KEY ??= Buffer.from(
+    process.env.CREDENTIAL_MASTER_KEY ||= Buffer.from(
       new Uint8Array(32).fill(7),
     ).toString('base64');
-    process.env.AUTH_SECRET ??= 'test-auth-secret-32-chars-padding-to-match';
-    process.env.ANTHROPIC_API_KEY ??= 'test-anthropic-key';
-    process.env.BRAVE_SEARCH_API_KEY ??= 'test-brave-key';
+    process.env.AUTH_SECRET ||= 'test-auth-secret-32-chars-padding-to-match';
+    process.env.ANTHROPIC_API_KEY ||= 'test-anthropic-key';
+    process.env.BRAVE_SEARCH_API_KEY ||= 'test-brave-key';
 
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
@@ -54,7 +54,7 @@ describe.skipIf(!DATABASE_URL)('GET /me + POST /me/active-org', () => {
       datasources: { db: { url: DATABASE_URL! } },
     });
     await prisma.$connect();
-    auth = createAuth(prisma);
+    auth = await createAuth(prisma);
   });
 
   afterAll(async () => {

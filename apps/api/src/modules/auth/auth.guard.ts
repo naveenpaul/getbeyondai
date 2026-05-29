@@ -31,12 +31,13 @@ import type { CurrentUserPayload } from './current-user.decorator';
 @Injectable()
 export class AuthGuard implements CanActivate {
   private readonly prisma: PrismaService;
+  // Cached at first request — better-auth ships ESM-only and createAuth
+  // dynamic-imports it (see auth.config.ts). Storing the promise itself
+  // de-duplicates concurrent first-request loads.
   private readonly auth: ReturnType<typeof createAuth>;
 
   constructor(@Inject(PrismaService) prisma: PrismaService) {
     this.prisma = prisma;
-    // The auth instance is cheap to construct; we cache one per guard
-    // instance so we don't re-init better-auth on every request.
     this.auth = createAuth(prisma);
   }
 
@@ -51,7 +52,8 @@ export class AuthGuard implements CanActivate {
       headers.set(k, Array.isArray(v) ? v.join(', ') : String(v));
     }
 
-    const result = await this.auth.api.getSession({ headers });
+    const auth = await this.auth;
+    const result = await auth.api.getSession({ headers });
     if (!result || !result.user) {
       throw new UnauthorizedException('Sign in to access this resource');
     }

@@ -45,8 +45,8 @@ describe.skipIf(!DATABASE_URL)(
         );
       }
       process.env.CREDENTIAL_MASTER_KEY = generateMasterKey();
-      process.env.ANTHROPIC_API_KEY ??= "test-anthropic-key";
-      process.env.BRAVE_SEARCH_API_KEY ??= "test-brave-key";
+      process.env.ANTHROPIC_API_KEY ||= "test-anthropic-key";
+      process.env.BRAVE_SEARCH_API_KEY ||= "test-brave-key";
 
       const { AppModule } = await import('../../app.module');
       const moduleRef = await Test.createTestingModule({

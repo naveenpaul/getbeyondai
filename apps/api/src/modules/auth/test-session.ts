@@ -48,7 +48,7 @@ export interface TestSessionResult {
 
 export async function createTestSession(
   prisma: PrismaClient,
-  auth: ReturnType<typeof createAuth>,
+  auth: Awaited<ReturnType<typeof createAuth>>,
   email: string,
 ): Promise<TestSessionResult> {
   const callbackURL = 'http://localhost:3001/research/new';

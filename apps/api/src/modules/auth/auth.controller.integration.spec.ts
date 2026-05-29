@@ -28,12 +28,12 @@ describe.skipIf(!DATABASE_URL)('AuthController (/api/auth/* round-trip)', () => 
         `Integration tests refuse to run against database "${dbName}".`,
       );
     }
-    process.env.ANTHROPIC_API_KEY ??= 'test-anthropic-key';
-    process.env.BRAVE_SEARCH_API_KEY ??= 'test-brave-key';
-    process.env.CREDENTIAL_MASTER_KEY ??= Buffer.from(
+    process.env.ANTHROPIC_API_KEY ||= 'test-anthropic-key';
+    process.env.BRAVE_SEARCH_API_KEY ||= 'test-brave-key';
+    process.env.CREDENTIAL_MASTER_KEY ||= Buffer.from(
       new Uint8Array(32).fill(7),
     ).toString('base64');
-    process.env.AUTH_SECRET ??= 'test-auth-secret-32-chars-padding-to-match';
+    process.env.AUTH_SECRET ||= 'test-auth-secret-32-chars-padding-to-match';
 
     const { AppModule } = await import('../../app.module');
     const moduleRef = await Test.createTestingModule({

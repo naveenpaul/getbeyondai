@@ -62,7 +62,8 @@ export class AuthController {
       body,
     });
 
-    const response = await this.auth.handler(webRequest);
+    const auth = await this.auth;
+    const response = await auth.handler(webRequest);
 
     reply.status(response.status);
     response.headers.forEach((value, key) => {

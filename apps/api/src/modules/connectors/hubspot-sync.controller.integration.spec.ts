@@ -56,7 +56,7 @@ describe.skipIf(!DATABASE_URL)(
     let app: NestFastifyApplication;
     let prisma: PrismaClient;
     let credentialManager: import('./credential-manager').CredentialManager;
-    let auth: ReturnType<typeof createAuth>;
+    let auth: Awaited<ReturnType<typeof createAuth>>;
     let alice: { cookie: string; userId: string; orgId: string };
     let bob: { cookie: string; userId: string; orgId: string };
     let hubspotAccountA: string;
@@ -70,8 +70,8 @@ describe.skipIf(!DATABASE_URL)(
         );
       }
       process.env.CREDENTIAL_MASTER_KEY = generateMasterKey();
-      process.env.ANTHROPIC_API_KEY ??= "test-anthropic-key";
-      process.env.BRAVE_SEARCH_API_KEY ??= "test-brave-key";
+      process.env.ANTHROPIC_API_KEY ||= "test-anthropic-key";
+      process.env.BRAVE_SEARCH_API_KEY ||= "test-brave-key";
       process.env.HUBSPOT_CLIENT_ID = 'client-id-test';
       process.env.HUBSPOT_CLIENT_SECRET = 'client-secret-test';
       process.env.AUTH_SECRET = 'test-auth-secret-32-chars-padding-to-match';
@@ -92,7 +92,7 @@ describe.skipIf(!DATABASE_URL)(
         datasources: { db: { url: DATABASE_URL! } },
       });
       await prisma.$connect();
-      auth = createAuth(prisma);
+      auth = await createAuth(prisma);
     });
 
     afterAll(async () => {

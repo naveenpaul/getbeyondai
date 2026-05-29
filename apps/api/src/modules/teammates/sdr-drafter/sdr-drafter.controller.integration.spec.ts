@@ -68,7 +68,7 @@ function toolUseBlock(
 describe.skipIf(!DATABASE_URL)('SdrDrafterController (integration)', () => {
   let app: NestFastifyApplication;
   let prisma: PrismaClient;
-  let auth: ReturnType<typeof createAuth>;
+  let auth: Awaited<ReturnType<typeof createAuth>>;
   let alice: { cookie: string; userId: string; orgId: string };
 
   beforeAll(async () => {
@@ -99,7 +99,7 @@ describe.skipIf(!DATABASE_URL)('SdrDrafterController (integration)', () => {
       datasources: { db: { url: DATABASE_URL! } },
     });
     await prisma.$connect();
-    auth = createAuth(prisma);
+    auth = await createAuth(prisma);
   });
 
   afterAll(async () => {

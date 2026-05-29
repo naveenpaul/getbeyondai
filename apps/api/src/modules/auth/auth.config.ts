@@ -1,7 +1,12 @@
-import { betterAuth } from 'better-auth';
-import { prismaAdapter } from 'better-auth/adapters/prisma';
-import { magicLink } from 'better-auth/plugins';
 import { PrismaClient } from '@prisma/client';
+
+// better-auth ships ESM-only (no CJS export). The compiled API output is
+// CommonJS, so a static `import { betterAuth } from 'better-auth'` turns
+// into `require()` at runtime and Node 20 errors with ERR_REQUIRE_ESM.
+// Dynamic imports compile to `import()` even under CommonJS, which Node
+// can resolve into an ESM module — so we defer the load to first use.
+// Vitest works either way (esbuild handles interop), which is why this
+// only surfaced when the dev runner exec'd the compiled JS.
 
 /**
  * better-auth instance + factory (T6.2).
@@ -83,7 +88,38 @@ async function sendMagicLink(
 // concrete plugins + additionalFields passed in, and an explicit annotation
 // strips that inference (the result becomes a generic `Auth<BetterAuthOptions>`
 // that doesn't carry our `orgId` field on User).
-export function createAuth(prisma: PrismaClient) {
+//
+// Async because of the dynamic-import workaround. Callers cache the
+// resolved value (`Awaited<ReturnType<typeof createAuth>>`) — there's no
+// need to re-enter the loader once it has settled.
+//
+// `importEsm` bypasses TypeScript's CommonJS lowering of `import()` into
+// `Promise.resolve().then(() => require(...))` — that lowering re-introduces
+// the ERR_REQUIRE_ESM crash this file is here to prevent.
+//
+// Two execution environments need different strategies:
+//   1. Production Node runs the compiled CJS. `new Function('import(s)')` is
+//      a real native dynamic import because TS can't see inside the string
+//      and lower it.
+//   2. Vitest runs the .ts directly via esbuild. esbuild handles `import(s)`
+//      natively — but vitest's CJS sandbox doesn't expose the host callback
+//      that `new Function` would need, so the trampoline throws there.
+// process.env.VITEST is set by the vitest runner. Branching on it gives us a
+// path that works in both.
+const importEsm: <T>(specifier: string) => Promise<T> = process.env.VITEST
+  ? <T>(s: string) => import(s) as Promise<T>
+  : (new Function('specifier', 'return import(specifier)') as <T>(
+      s: string,
+    ) => Promise<T>);
+
+export async function createAuth(prisma: PrismaClient) {
+  const [{ betterAuth }, { prismaAdapter }, { magicLink }] = await Promise.all([
+    importEsm<typeof import('better-auth')>('better-auth'),
+    importEsm<typeof import('better-auth/adapters/prisma')>(
+      'better-auth/adapters/prisma',
+    ),
+    importEsm<typeof import('better-auth/plugins')>('better-auth/plugins'),
+  ]);
   return betterAuth({
     baseURL: BASE_URL,
     basePath: '/api/auth',
