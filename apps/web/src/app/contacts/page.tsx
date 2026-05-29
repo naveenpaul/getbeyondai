@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, ExternalLink, Loader2, Search } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Loader2, Search, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -95,25 +95,33 @@ export default function ContactsPage(): React.JSX.Element {
               row.
             </CardDescription>
           </div>
-          <form
-            onSubmit={onSearch}
-            className="flex items-center gap-2"
-            role="search"
-          >
-            <div className="relative">
-              <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={pendingQ}
-                onChange={(e) => setPendingQ(e.target.value)}
-                placeholder="Search name, email, company"
-                className="pl-7 w-72"
-                aria-label="Search contacts"
-              />
-            </div>
-            <Button type="submit" variant="secondary" size="sm">
-              Search
-            </Button>
-          </form>
+          <div className="flex items-center gap-2">
+            <form
+              onSubmit={onSearch}
+              className="flex items-center gap-2"
+              role="search"
+            >
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={pendingQ}
+                  onChange={(e) => setPendingQ(e.target.value)}
+                  placeholder="Search name, email, company"
+                  className="pl-7 w-72"
+                  aria-label="Search contacts"
+                />
+              </div>
+              <Button type="submit" variant="secondary" size="sm">
+                Search
+              </Button>
+            </form>
+            <Link href="/contacts/import">
+              <Button size="sm">
+                <Upload className="h-3.5 w-3.5" />
+                Import CSV
+              </Button>
+            </Link>
+          </div>
         </CardHeader>
 
         <CardContent>
@@ -275,12 +283,17 @@ function EmptyState({ hasQuery }: { hasQuery: boolean }): React.JSX.Element {
     );
   }
   return (
-    <div className="space-y-2 py-16 text-center">
+    <div className="space-y-3 py-16 text-center">
       <p className="text-sm font-medium">No contacts yet.</p>
       <p className="text-xs text-muted-foreground">
-        Connect HubSpot from settings, or import a CSV via the API. A
-        guided import flow is on the roadmap.
+        Import a CSV to get started.
       </p>
+      <Link href="/contacts/import" className="inline-block">
+        <Button size="sm">
+          <Upload className="h-3.5 w-3.5" />
+          Import CSV
+        </Button>
+      </Link>
     </div>
   );
 }

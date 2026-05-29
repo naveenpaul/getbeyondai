@@ -216,6 +216,78 @@ export async function getDraft(id: string): Promise<DraftDetailResponse> {
   return res.json() as Promise<DraftDetailResponse>;
 }
 
+// ─── CSV import ───────────────────────────────────────────────────────────
+
+export interface CsvAccountResponse {
+  id: string;
+}
+
+export interface CsvColumnMapping {
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  title?: string;
+  company?: string;
+  linkedinUrl?: string;
+}
+
+export interface CsvImportEnqueueResponse {
+  syncRunId: string;
+  status: 'running';
+}
+
+export interface CsvSyncRunStatusResponse {
+  syncRunId: string;
+  status: 'running' | 'completed' | 'failed';
+  recordsIn: number;
+  recordsOut: number;
+  errorCount: number;
+  errors: Array<{ row: number; reason: string; message: string }>;
+}
+
+export async function ensureCsvAccount(): Promise<CsvAccountResponse> {
+  const res = await fetch(`${env.apiUrl}/connectors/csv/account`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<CsvAccountResponse>;
+}
+
+export async function submitCsvImport(args: {
+  file: File;
+  sourceAccountId: string;
+  columnMapping: CsvColumnMapping;
+}): Promise<CsvImportEnqueueResponse> {
+  const form = new FormData();
+  form.append('file', args.file, args.file.name);
+  form.append(
+    'metadata',
+    JSON.stringify({
+      sourceAccountId: args.sourceAccountId,
+      columnMapping: args.columnMapping,
+    }),
+  );
+  const res = await fetch(`${env.apiUrl}/connectors/csv/import`, {
+    method: 'POST',
+    credentials: 'include',
+    body: form,
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<CsvImportEnqueueResponse>;
+}
+
+export async function getCsvSyncRun(
+  syncRunId: string,
+): Promise<CsvSyncRunStatusResponse> {
+  const res = await fetch(
+    `${env.apiUrl}/connectors/csv/sync-runs/${encodeURIComponent(syncRunId)}`,
+    { credentials: 'include' },
+  );
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<CsvSyncRunStatusResponse>;
+}
+
 export async function postSdrDrafterRun(
   payload: SdrDrafterRunRequest,
 ): Promise<SdrDrafterRunEnqueueResponse> {

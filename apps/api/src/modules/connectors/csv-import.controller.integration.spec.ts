@@ -416,5 +416,77 @@ describe.skipIf(!DATABASE_URL)(
       });
       expect(res.statusCode).toBe(403);
     });
+
+    describe('POST /connectors/csv/account', () => {
+      it('creates a CSV ConnectorAccount when none exists for the org', async () => {
+        // beforeEach already seeded one for alice — wipe it so we start clean.
+        await prisma.connectorAccount.deleteMany({
+          where: { orgId: alice.orgId, kind: 'csv' },
+        });
+
+        const res = await app.inject({
+          method: 'POST',
+          url: '/connectors/csv/account',
+          headers: { cookie: alice.cookie },
+        });
+        expect(res.statusCode).toBe(201);
+        const body = res.json() as { id: string };
+        expect(body.id).toBeTruthy();
+
+        const row = await prisma.connectorAccount.findUnique({
+          where: { id: body.id },
+        });
+        expect(row?.orgId).toBe(alice.orgId);
+        expect(row?.kind).toBe('csv');
+        expect(row?.authMode).toBe('upload');
+        expect(Buffer.from(row?.credentials ?? []).length).toBe(0);
+      });
+
+      it('is idempotent — returns the existing account on repeat calls', async () => {
+        const first = await app.inject({
+          method: 'POST',
+          url: '/connectors/csv/account',
+          headers: { cookie: alice.cookie },
+        });
+        const second = await app.inject({
+          method: 'POST',
+          url: '/connectors/csv/account',
+          headers: { cookie: alice.cookie },
+        });
+
+        const firstId = (first.json() as { id: string }).id;
+        const secondId = (second.json() as { id: string }).id;
+        expect(firstId).toBe(secondId);
+
+        const count = await prisma.connectorAccount.count({
+          where: { orgId: alice.orgId, kind: 'csv' },
+        });
+        expect(count).toBe(1);
+      });
+
+      it('scopes per-org — alice and bob each get a distinct account', async () => {
+        const aliceRes = await app.inject({
+          method: 'POST',
+          url: '/connectors/csv/account',
+          headers: { cookie: alice.cookie },
+        });
+        const bobRes = await app.inject({
+          method: 'POST',
+          url: '/connectors/csv/account',
+          headers: { cookie: bob.cookie },
+        });
+        const aliceId = (aliceRes.json() as { id: string }).id;
+        const bobId = (bobRes.json() as { id: string }).id;
+        expect(aliceId).not.toBe(bobId);
+      });
+
+      it('returns 401 without a session cookie', async () => {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/connectors/csv/account',
+        });
+        expect(res.statusCode).toBe(401);
+      });
+    });
   },
 );

@@ -68,6 +68,38 @@ export class CsvImportController {
   }
 
   /**
+   * Get-or-create the org's CSV ConnectorAccount.
+   *
+   * CSV uploads don't carry credentials, but the upload endpoint requires
+   * a sourceAccountId so every Contact has a connector lineage. We expose
+   * exactly one CSV account per org (the kind is one-of in v1) — calling
+   * this from the UI before the first import surfaces an id the user
+   * never has to think about.
+   *
+   * Idempotent: existing account returned untouched.
+   */
+  @Post('account')
+  async ensureAccount(
+    @CurrentUser() user: CurrentUserPayload,
+  ): Promise<{ id: string }> {
+    const existing = await this.prisma.connectorAccount.findFirst({
+      where: { orgId: user.orgId, kind: 'csv' },
+      select: { id: true },
+    });
+    if (existing) return { id: existing.id };
+    const created = await this.prisma.connectorAccount.create({
+      data: {
+        orgId: user.orgId,
+        kind: 'csv',
+        authMode: 'upload',
+        credentials: Buffer.from(''), // CSV uploads have no credentials
+      },
+      select: { id: true },
+    });
+    return { id: created.id };
+  }
+
+  /**
    * Enqueue a CSV import job. Returns 202 + SyncRun id. Caller polls
    * GET /connectors/csv/sync-runs/:id for terminal status.
    *
