@@ -1,10 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { QueueService } from '../../queue/queue.service';
-import {
-  ANTHROPIC_CLIENT,
-  type AnthropicMessagesClient,
-} from '../runtime/call-model';
+import { LLM_PROVIDER, type LlmProvider } from '../runtime/llm-provider';
 import { RUN_EVENT_BUS, type RunEventBus } from '../runtime/run-event-bus';
 import { runResearch } from './researcher.service';
 
@@ -41,18 +38,18 @@ export class ResearcherWorker implements OnModuleInit {
   private readonly logger = new Logger(ResearcherWorker.name);
   private readonly queue: QueueService;
   private readonly prisma: PrismaService;
-  private readonly anthropic: AnthropicMessagesClient;
+  private readonly llm: LlmProvider;
   private readonly eventBus: RunEventBus;
 
   constructor(
     @Inject(QueueService) queue: QueueService,
     @Inject(PrismaService) prisma: PrismaService,
-    @Inject(ANTHROPIC_CLIENT) anthropic: AnthropicMessagesClient,
+    @Inject(LLM_PROVIDER) llm: LlmProvider,
     @Inject(RUN_EVENT_BUS) eventBus: RunEventBus,
   ) {
     this.queue = queue;
     this.prisma = prisma;
-    this.anthropic = anthropic;
+    this.llm = llm;
     this.eventBus = eventBus;
   }
 
@@ -68,7 +65,7 @@ export class ResearcherWorker implements OnModuleInit {
           const result = await runResearch(
             {
               prisma: this.prisma,
-              anthropic: this.anthropic,
+              llm: this.llm,
               emitEvent: (event) => this.eventBus.publish(event),
             },
             {

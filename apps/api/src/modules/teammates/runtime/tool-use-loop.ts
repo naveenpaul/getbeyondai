@@ -1,6 +1,5 @@
-import type Anthropic from '@anthropic-ai/sdk';
 import type { Prisma, PrismaClient } from '@prisma/client';
-import { callModel, type AnthropicMessagesClient } from './call-model';
+import { callModel } from './call-model';
 import {
   ClaimContractError,
   EMIT_DRAFT_TOOL,
@@ -8,6 +7,13 @@ import {
   persistDraftFromEmitArgs,
 } from './claim-contract';
 import { BudgetExceededError } from './cost';
+import type { LlmProvider } from './llm-provider';
+import {
+  LlmCapabilityError,
+  type ContentBlock,
+  type Message,
+  type ToolDefinition,
+} from './llm-types';
 import type { AgentTool } from './agent-tool';
 import type { RunEvent } from './run-event-bus';
 
@@ -44,7 +50,14 @@ import type { RunEvent } from './run-event-bus';
  *   - All-claims-dropped (ClaimContractError code=no_valid_claims) → also
  *     reported to the model so it can supply citations and retry. The user
  *     never sees a Draft built from hallucinated claims.
+ *
+ * Provider-neutral: the loop speaks only neutral `llm-types` shapes and an
+ * `LlmProvider`. No vendor SDK type appears here (quarantined to `providers/`).
  */
+
+/** Narrowed neutral block types the loop pattern-matches on. */
+type ToolUseBlock = Extract<ContentBlock, { type: 'tool_use' }>;
+type ToolResultBlock = Extract<ContentBlock, { type: 'tool_result' }>;
 
 export interface RunAgentParams {
   /** AgentRun.id — must already exist with status='running'. */
@@ -61,7 +74,8 @@ export interface RunAgentParams {
   maxToolCalls: number;
   maxWallSecs: number;
   prisma: PrismaClient;
-  anthropic: AnthropicMessagesClient;
+  /** Provider-neutral LLM driver (built per run, bound to the resolved key). */
+  llm: LlmProvider;
   /** Clock override for tests. Defaults to Date.now. */
   now?: () => number;
   /**
@@ -97,22 +111,39 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
   const now = params.now ?? (() => Date.now());
   const startedAtMs = now();
 
-  // Build the model-side tool list: teammate tools + emit_draft.
-  const anthropicTools: Anthropic.Tool[] = [
+  // Fail-fast capability check (plan decision #7): the loop always supplies
+  // tools (emit_draft at minimum) and routinely dispatches them in parallel.
+  // A provider/model that can't do tool use would fail opaquely mid-run — so
+  // assert up front, before spending a cent, with a clear message.
+  if (!params.llm.capabilities.toolUse) {
+    throw new LlmCapabilityError(
+      params.llm.name,
+      `model "${params.modelName}" (provider ${params.llm.name}) does not support tool use, which the teammate runtime requires`,
+    );
+  }
+
+  // Build the model-side tool list: teammate tools + emit_draft. AgentTool and
+  // EMIT_DRAFT_TOOL both already carry a JSON-Schema input; map to neutral
+  // ToolDefinition (note EMIT_DRAFT_TOOL uses the SDK-style `input_schema` key).
+  const tools: ToolDefinition[] = [
     ...params.tools.map((t) => ({
       name: t.name,
       description: t.description,
-      input_schema: t.inputSchema as Anthropic.Tool['input_schema'],
+      inputSchema: t.inputSchema,
     })),
-    EMIT_DRAFT_TOOL as unknown as Anthropic.Tool,
+    {
+      name: EMIT_DRAFT_TOOL.name,
+      description: EMIT_DRAFT_TOOL.description,
+      inputSchema: EMIT_DRAFT_TOOL.input_schema,
+    },
   ];
 
   // Lookup for dispatch.
   const toolsByName = new Map<string, AgentTool>();
   for (const t of params.tools) toolsByName.set(t.name, t);
 
-  const messages: Anthropic.MessageParam[] = [
-    { role: 'user', content: params.userPrompt },
+  const messages: Message[] = [
+    { role: 'user', content: [{ type: 'text', text: params.userPrompt }] },
   ];
 
   let toolSeq = 0;
@@ -142,12 +173,12 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
 
     let modelResult;
     try {
-      modelResult = await callModel(params.prisma, params.anthropic, {
+      modelResult = await callModel(params.prisma, params.llm, {
         runId: params.runId,
         modelName: params.modelName,
         systemPrompt: params.systemPrompt,
         messages,
-        tools: anthropicTools,
+        tools,
         budgetCents: params.budgetCents,
         emitEvent: params.emitEvent,
         turn,
@@ -170,7 +201,7 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
     messages.push({ role: 'assistant', content: message.content });
 
     const toolUses = message.content.filter(
-      (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+      (b): b is ToolUseBlock => b.type === 'tool_use',
     );
 
     if (toolUses.length === 0) {
@@ -185,12 +216,12 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
       );
     }
 
-    // Parallel dispatch — Claude routinely returns multiple independent
+    // Parallel dispatch — the model routinely returns multiple independent
     // tool_use blocks per turn (e.g. brave_search + 3 fetch_url calls). The
     // model expects them to run concurrently; serial dispatch would burn
     // round-trip latency for no reason. Each tool's ToolCall row gets its
     // toolSeq assigned up front (array index) so the (runId, toolSeq)
-    // unique constraint holds without a races on the autoincrement.
+    // unique constraint holds without a race on the autoincrement.
     //
     // emit_draft is dispatched in the same parallel batch — it queries the
     // Citation table at validation time, so any fetch_url Citations from
@@ -253,8 +284,8 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
     }
 
     // Otherwise feed every tool_result back in the original order.
-    const toolResults: Anthropic.ToolResultBlockParam[] = outcomes.flatMap(
-      (o) => (o.kind === 'tool_result' ? [o.block] : []),
+    const toolResults: ToolResultBlock[] = outcomes.flatMap((o) =>
+      o.kind === 'tool_result' ? [o.block] : [],
     );
     messages.push({ role: 'user', content: toolResults });
   }
@@ -266,10 +297,10 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
  */
 type ToolDispatchOutcome =
   | { kind: 'completed'; draftId: string }
-  | { kind: 'tool_result'; block: Anthropic.ToolResultBlockParam };
+  | { kind: 'tool_result'; block: ToolResultBlock };
 
 async function dispatchOneToolUse(params: {
-  toolUse: Anthropic.ToolUseBlock;
+  toolUse: ToolUseBlock;
   toolSeq: number;
   modelCallId: string;
   toolsByName: Map<string, AgentTool>;
@@ -332,9 +363,9 @@ async function dispatchOneToolUse(params: {
       kind: 'tool_result',
       block: {
         type: 'tool_result',
-        tool_use_id: toolUse.id,
+        toolUseId: toolUse.id,
         content: emitOutcome.modelMessage,
-        is_error: true,
+        isError: true,
       },
     };
   }
@@ -366,9 +397,9 @@ async function dispatchOneToolUse(params: {
       kind: 'tool_result',
       block: {
         type: 'tool_result',
-        tool_use_id: toolUse.id,
+        toolUseId: toolUse.id,
         content: `Unknown tool: "${toolUse.name}". Available: ${[...params.toolsByName.keys(), 'emit_draft'].join(', ')}`,
-        is_error: true,
+        isError: true,
       },
     };
   }
@@ -413,9 +444,9 @@ async function dispatchOneToolUse(params: {
     kind: 'tool_result',
     block: {
       type: 'tool_result',
-      tool_use_id: toolUse.id,
+      toolUseId: toolUse.id,
       content: typeof result === 'string' ? result : JSON.stringify(result),
-      is_error: isError,
+      isError,
     },
   };
 }
@@ -443,7 +474,7 @@ async function handleEmitDraft(params: {
   orgId: string;
   teammate: string;
   runId: string;
-  toolUse: Anthropic.ToolUseBlock;
+  toolUse: ToolUseBlock;
   toolSeq: number;
   modelCallId: string;
   emitEvent?: (event: RunEvent) => void;

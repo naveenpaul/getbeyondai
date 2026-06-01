@@ -32,29 +32,64 @@ export const MODEL_PRICING: Record<string, ModelRate> = {
 };
 
 /**
+ * Prompt-cache pricing multipliers, applied to a model's input rate.
+ * Anthropic prices a cache write at 1.25× the input rate (one-time, when the
+ * cache entry is created) and a cache read at 0.1× (every subsequent hit).
+ * These are off the fresh-input rate, which is the standard the input tokens
+ * are already billed at, so we reuse `inputPerMillion`.
+ */
+const CACHE_WRITE_MULTIPLIER = 1.25;
+const CACHE_READ_MULTIPLIER = 0.1;
+
+/**
  * Compute the cost in cents for one model call. Unknown model names raise —
  * we'd rather fail loudly than silently bill at $0 (which would let a typo
  * masquerade as a free run, breaking the cost-transparency contract).
+ *
+ * Cache tokens are optional and default to 0, so callers/providers that don't
+ * report them (or models without prompt caching) bill exactly as before.
+ * Anthropic reports cache_read / cache_creation tokens SEPARATELY from
+ * `input_tokens`, so they are added on top, each at its multiplier of the
+ * input rate.
  */
 export function costCentsForCall(
   modelName: string,
-  usage: { inputTokens: number; outputTokens: number },
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  },
 ): number {
   const rate = MODEL_PRICING[modelName];
   if (!rate) {
     throw new UnknownModelError(modelName);
   }
-  if (usage.inputTokens < 0 || usage.outputTokens < 0) {
+  const cacheRead = usage.cacheReadTokens ?? 0;
+  const cacheWrite = usage.cacheWriteTokens ?? 0;
+  if (
+    usage.inputTokens < 0 ||
+    usage.outputTokens < 0 ||
+    cacheRead < 0 ||
+    cacheWrite < 0
+  ) {
     throw new RangeError(
-      `token usage must be non-negative; got input=${usage.inputTokens} output=${usage.outputTokens}`,
+      `token usage must be non-negative; got input=${usage.inputTokens} ` +
+        `output=${usage.outputTokens} cacheRead=${cacheRead} cacheWrite=${cacheWrite}`,
     );
   }
   const inputDollars = (usage.inputTokens / 1_000_000) * rate.inputPerMillion;
   const outputDollars =
     (usage.outputTokens / 1_000_000) * rate.outputPerMillion;
+  const cacheReadDollars =
+    (cacheRead / 1_000_000) * rate.inputPerMillion * CACHE_READ_MULTIPLIER;
+  const cacheWriteDollars =
+    (cacheWrite / 1_000_000) * rate.inputPerMillion * CACHE_WRITE_MULTIPLIER;
   // Multiply by 100 → cents. Use ceil so a sub-cent call rounds up to 1 cent
   // (avoid silent under-billing on tiny calls).
-  return Math.ceil((inputDollars + outputDollars) * 100);
+  return Math.ceil(
+    (inputDollars + outputDollars + cacheReadDollars + cacheWriteDollars) * 100,
+  );
 }
 
 export class UnknownModelError extends Error {

@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import type Anthropic from '@anthropic-ai/sdk';
 import { runAgent } from './tool-use-loop';
 import type { AgentTool } from './agent-tool';
-import type { AnthropicMessagesClient } from './call-model';
+import type { LlmProvider } from './llm-provider';
+import type {
+  ContentBlock,
+  CreateMessageResult,
+  StopReason,
+} from './llm-types';
 import type { RunEvent } from './run-event-bus';
 
 /**
@@ -162,24 +166,21 @@ function makeProperFakePrisma(seedRun: FakeRun, seedCitations: FakeCitation[] = 
   return inst;
 }
 
+/** A neutral provider response (replaces the old Anthropic.Message fake). */
 function fakeMessage(opts: {
-  content: Anthropic.ContentBlock[];
+  content: ContentBlock[];
   inputTokens?: number;
   outputTokens?: number;
-  stopReason?: 'end_turn' | 'tool_use' | 'max_tokens';
-}): Anthropic.Message {
+  stopReason?: StopReason;
+}): CreateMessageResult {
   return {
-    id: `msg-${Math.random()}`,
-    type: 'message',
-    role: 'assistant',
     content: opts.content,
-    model: 'claude-sonnet-4-6',
-    stop_reason: opts.stopReason ?? 'tool_use',
-    stop_sequence: null,
+    stopReason: opts.stopReason ?? 'tool_use',
     usage: {
-      input_tokens: opts.inputTokens ?? 100,
-      output_tokens: opts.outputTokens ?? 50,
+      inputTokens: opts.inputTokens ?? 100,
+      outputTokens: opts.outputTokens ?? 50,
     },
+    model: 'claude-sonnet-4-6',
   };
 }
 
@@ -187,8 +188,8 @@ function toolUseBlock(
   name: string,
   input: unknown,
   id = `tu-${Math.random()}`,
-): Anthropic.ToolUseBlock {
-  return { type: 'tool_use', id, name, input } as Anthropic.ToolUseBlock;
+): ContentBlock {
+  return { type: 'tool_use', id, name, input };
 }
 
 const BASE_RUN: FakeRun = {
@@ -202,14 +203,24 @@ const BASE_RUN: FakeRun = {
   completedAt: null,
 };
 
-function makeAnthropic(
-  responses: Anthropic.Message[],
-): AnthropicMessagesClient {
-  const create = vi.fn();
-  for (const r of responses) create.mockResolvedValueOnce(r);
-  return {
-    messages: { create } as unknown as Anthropic['messages'],
-  };
+const FAKE_CAPS = {
+  toolUse: true,
+  parallelToolUse: true,
+  caching: false,
+} as const;
+
+/** Fake provider that returns `results` one per call, in order. */
+function makeProvider(results: CreateMessageResult[]): LlmProvider {
+  const createMessage = vi.fn();
+  for (const r of results) createMessage.mockResolvedValueOnce(r);
+  return { name: 'fake', capabilities: FAKE_CAPS, createMessage };
+}
+
+/** Fake provider backed by a custom createMessage (for throw/clock cases). */
+function makeProviderFn(
+  createMessage: LlmProvider['createMessage'],
+): LlmProvider {
+  return { name: 'fake', capabilities: FAKE_CAPS, createMessage };
 }
 
 // ─── tests ──────────────────────────────────────────────────────────
@@ -219,7 +230,7 @@ describe('runAgent — happy path (single emit_draft turn)', () => {
     const prisma = makeProperFakePrisma(BASE_RUN, [
       { id: 'cit-1', runId: 'run-1', url: 'https://example.com' },
     ]);
-    const anthropic = makeAnthropic([
+    const llm = makeProvider([
       fakeMessage({
         content: [
           toolUseBlock('emit_draft', {
@@ -243,7 +254,7 @@ describe('runAgent — happy path (single emit_draft turn)', () => {
       maxToolCalls: 10,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
     });
 
     expect(result.status).toBe('completed');
@@ -274,7 +285,7 @@ describe('runAgent — multi-turn with tool calls', () => {
         execute: searchExec,
       },
     ];
-    const anthropic = makeAnthropic([
+    const llm = makeProvider([
       fakeMessage({
         content: [toolUseBlock('brave_search', { q: 'Acme funding' }, 'tu-1')],
       }),
@@ -302,7 +313,7 @@ describe('runAgent — multi-turn with tool calls', () => {
       maxToolCalls: 10,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
     });
 
     expect(result.status).toBe('completed');
@@ -324,7 +335,7 @@ describe('runAgent — multi-turn with tool calls', () => {
     const prisma = makeProperFakePrisma(BASE_RUN, [
       { id: 'cit-1', runId: 'run-1', url: 'x' },
     ]);
-    const anthropic = makeAnthropic([
+    const llm = makeProvider([
       fakeMessage({
         content: [toolUseBlock('nonexistent_tool', {}, 'tu-1')],
       }),
@@ -351,7 +362,7 @@ describe('runAgent — multi-turn with tool calls', () => {
       maxToolCalls: 10,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
     });
 
     expect(result.status).toBe('completed');
@@ -373,7 +384,7 @@ describe('runAgent — multi-turn with tool calls', () => {
         }),
       },
     ];
-    const anthropic = makeAnthropic([
+    const llm = makeProvider([
       fakeMessage({ content: [toolUseBlock('flaky_tool', {}, 'tu-1')] }),
       fakeMessage({
         content: [
@@ -398,7 +409,7 @@ describe('runAgent — multi-turn with tool calls', () => {
       maxToolCalls: 10,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
     });
 
     expect(result.status).toBe('completed');
@@ -413,15 +424,13 @@ describe('runAgent — bound enforcement', () => {
   it('maxToolCalls trips → status=abstained reason=exceeded_maxToolCalls', async () => {
     const prisma = makeProperFakePrisma(BASE_RUN);
     // Model keeps trying to call a tool forever.
-    const anthropic: AnthropicMessagesClient = {
-      messages: {
-        create: vi.fn(async () =>
-          fakeMessage({
-            content: [toolUseBlock('any_tool', {}, `tu-${Math.random()}`)],
-          }),
-        ),
-      } as unknown as Anthropic['messages'],
-    };
+    const llm = makeProviderFn(
+      vi.fn(async () =>
+        fakeMessage({
+          content: [toolUseBlock('any_tool', {}, `tu-${Math.random()}`)],
+        }),
+      ),
+    );
 
     const result = await runAgent({
       runId: 'run-1',
@@ -435,7 +444,7 @@ describe('runAgent — bound enforcement', () => {
       maxToolCalls: 3,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
     });
 
     expect(result.status).toBe('abstained');
@@ -446,17 +455,15 @@ describe('runAgent — bound enforcement', () => {
   it('maxWallSecs trips → status=abstained reason=exceeded_maxWallSecs', async () => {
     const prisma = makeProperFakePrisma(BASE_RUN);
     let clock = 1_000_000;
-    const anthropic: AnthropicMessagesClient = {
-      messages: {
-        create: vi.fn(async () => {
-          // Advance the clock past maxWallSecs after the first call.
-          clock += 100_000; // 100 seconds
-          return fakeMessage({
-            content: [toolUseBlock('any', {}, `tu-${clock}`)],
-          });
-        }),
-      } as unknown as Anthropic['messages'],
-    };
+    const llm = makeProviderFn(
+      vi.fn(async () => {
+        // Advance the clock past maxWallSecs after the first call.
+        clock += 100_000; // 100 seconds
+        return fakeMessage({
+          content: [toolUseBlock('any', {}, `tu-${clock}`)],
+        });
+      }),
+    );
 
     const result = await runAgent({
       runId: 'run-1',
@@ -470,7 +477,7 @@ describe('runAgent — bound enforcement', () => {
       maxToolCalls: 100,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
       now: () => clock,
     });
 
@@ -481,17 +488,15 @@ describe('runAgent — bound enforcement', () => {
   it('budget overrun mid-loop → status=abstained reason=exceeded_budget', async () => {
     const prisma = makeProperFakePrisma({ ...BASE_RUN, costCents: 0 });
     // Each call costs ~1800¢. budget=1500¢ → second call trips.
-    const anthropic: AnthropicMessagesClient = {
-      messages: {
-        create: vi.fn(async () =>
-          fakeMessage({
-            content: [toolUseBlock('any', {}, `tu-${Math.random()}`)],
-            inputTokens: 1_000_000,
-            outputTokens: 1_000_000,
-          }),
-        ),
-      } as unknown as Anthropic['messages'],
-    };
+    const llm = makeProviderFn(
+      vi.fn(async () =>
+        fakeMessage({
+          content: [toolUseBlock('any', {}, `tu-${Math.random()}`)],
+          inputTokens: 1_000_000,
+          outputTokens: 1_000_000,
+        }),
+      ),
+    );
 
     const result = await runAgent({
       runId: 'run-1',
@@ -505,7 +510,7 @@ describe('runAgent — bound enforcement', () => {
       maxToolCalls: 100,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
     });
 
     expect(result.status).toBe('abstained');
@@ -518,7 +523,7 @@ describe('runAgent — claim enforcement', () => {
     const prisma = makeProperFakePrisma(BASE_RUN, [
       { id: 'cit-1', runId: 'run-1', url: 'x' },
     ]);
-    const anthropic = makeAnthropic([
+    const llm = makeProvider([
       // First turn: malformed (claims missing text)
       fakeMessage({
         content: [
@@ -553,7 +558,7 @@ describe('runAgent — claim enforcement', () => {
       maxToolCalls: 10,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
     });
 
     expect(result.status).toBe('completed');
@@ -564,7 +569,7 @@ describe('runAgent — claim enforcement', () => {
 
   it('emit_draft with only uncited+not-abstained claims → all dropped → retry message sent', async () => {
     const prisma = makeProperFakePrisma(BASE_RUN, []);
-    const anthropic = makeAnthropic([
+    const llm = makeProvider([
       fakeMessage({
         content: [
           toolUseBlock('emit_draft', {
@@ -592,7 +597,7 @@ describe('runAgent — claim enforcement', () => {
       maxToolCalls: 2,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
     });
 
     expect(result.status).toBe('abstained');
@@ -607,7 +612,7 @@ describe('runAgent — claim enforcement', () => {
 
   it('emit_draft citing a fake citationId → claim dropped; if dangling-only, retry message sent', async () => {
     const prisma = makeProperFakePrisma(BASE_RUN, []);
-    const anthropic = makeAnthropic([
+    const llm = makeProvider([
       fakeMessage({
         content: [
           toolUseBlock('emit_draft', {
@@ -635,7 +640,7 @@ describe('runAgent — claim enforcement', () => {
       maxToolCalls: 2,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
     });
     expect(result.status).toBe('abstained');
     expect(prisma._drafts).toHaveLength(0);
@@ -664,7 +669,7 @@ describe('runAgent — parallel tool dispatch within a turn', () => {
     });
     const tools: AgentTool[] = [slowTool('a'), slowTool('b'), slowTool('c')];
 
-    const anthropic = makeAnthropic([
+    const llm = makeProvider([
       // First turn: model emits THREE independent tool_use blocks
       fakeMessage({
         content: [
@@ -698,7 +703,7 @@ describe('runAgent — parallel tool dispatch within a turn', () => {
       maxToolCalls: 10,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
     });
     const wallTotal = Date.now() - wallStart;
 
@@ -731,7 +736,7 @@ describe('runAgent — parallel tool dispatch within a turn', () => {
       }),
     }));
 
-    const anthropic = makeAnthropic([
+    const llm = makeProvider([
       fakeMessage({
         content: [
           toolUseBlock('a', {}, 'tu-a'),
@@ -762,7 +767,7 @@ describe('runAgent — parallel tool dispatch within a turn', () => {
       maxToolCalls: 10,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
     });
 
     // ToolCalls ordered by toolSeq must match the tool_use array order,
@@ -801,7 +806,7 @@ describe('runAgent — parallel tool dispatch within a turn', () => {
         execute: vi.fn(async () => ({ ok: true })),
       },
     ];
-    const anthropic = makeAnthropic([
+    const llm = makeProvider([
       fakeMessage({
         content: [
           toolUseBlock('good_a', {}, 'tu-1'),
@@ -832,7 +837,7 @@ describe('runAgent — parallel tool dispatch within a turn', () => {
       maxToolCalls: 10,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
     });
     expect(result.status).toBe('completed');
 
@@ -852,7 +857,7 @@ describe('runAgent — emitEvent progress callback', () => {
       { id: 'cit-1', runId: 'run-1', url: 'x' },
     ]);
     const events: RunEvent[] = [];
-    const anthropic = makeAnthropic([
+    const llm = makeProvider([
       fakeMessage({
         content: [
           toolUseBlock('any_tool', {}, 'tu-1'),
@@ -889,7 +894,7 @@ describe('runAgent — emitEvent progress callback', () => {
       maxToolCalls: 10,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
       emitEvent: (e) => events.push(e),
     });
 
@@ -913,12 +918,12 @@ describe('runAgent — emitEvent progress callback', () => {
   it('abstained path: emits run_abstained with the trip reason', async () => {
     const prisma = makeProperFakePrisma(BASE_RUN);
     const events: RunEvent[] = [];
-    const anthropic = makeAnthropic([
+    const llm = makeProvider([
       fakeMessage({
         content: [
-          { type: 'text', text: 'no draft' } as Anthropic.TextBlock,
+          { type: 'text', text: 'no draft' },
         ],
-        stopReason: 'end_turn',
+        stopReason: 'end',
       }),
     ]);
 
@@ -934,7 +939,7 @@ describe('runAgent — emitEvent progress callback', () => {
       maxToolCalls: 10,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
       emitEvent: (e) => events.push(e),
     });
 
@@ -967,7 +972,7 @@ describe('runAgent — emitEvent progress callback', () => {
         })),
       },
     ];
-    const anthropic = makeAnthropic([
+    const llm = makeProvider([
       fakeMessage({
         content: [
           toolUseBlock('brave_search', { q: 'x' }, 'tu-1'),
@@ -997,7 +1002,7 @@ describe('runAgent — emitEvent progress callback', () => {
       maxToolCalls: 10,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
       emitEvent: (e) => events.push(e),
     });
 
@@ -1022,10 +1027,10 @@ describe('runAgent — emitEvent progress callback', () => {
 describe('runAgent — no draft after turn ends', () => {
   it('model produces text-only response (end_turn) → status=abstained reason=no_draft_emitted', async () => {
     const prisma = makeProperFakePrisma(BASE_RUN);
-    const anthropic = makeAnthropic([
+    const llm = makeProvider([
       fakeMessage({
-        content: [{ type: 'text', text: 'I cannot find any info.' } as Anthropic.TextBlock],
-        stopReason: 'end_turn',
+        content: [{ type: 'text', text: 'I cannot find any info.' }],
+        stopReason: 'end',
       }),
     ]);
 
@@ -1041,7 +1046,7 @@ describe('runAgent — no draft after turn ends', () => {
       maxToolCalls: 10,
       maxWallSecs: 60,
       prisma: prisma as never,
-      anthropic,
+      llm,
     });
     expect(result.status).toBe('abstained');
     expect(result.reason).toBe('no_draft_emitted');

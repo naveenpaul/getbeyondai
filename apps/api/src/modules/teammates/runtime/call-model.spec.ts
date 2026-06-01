@@ -1,15 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type Anthropic from '@anthropic-ai/sdk';
-import {
-  callModel,
-  type AnthropicMessagesClient,
-} from './call-model';
+import { callModel } from './call-model';
 import { BudgetExceededError } from './cost';
+import type { LlmProvider } from './llm-provider';
+import type { CreateMessageResult, StopReason } from './llm-types';
 
 /**
- * Unit tests against a fake Anthropic client + in-memory Prisma. Real DB +
- * full audit-log persistence is covered in the integration spec attached to
- * runAgent / the Researcher (T4b/T4c).
+ * Unit tests against a fake LlmProvider + in-memory Prisma. callModel is the
+ * policy layer (budget + audit); the vendor wire mapping is the provider's
+ * job and is covered by providers/anthropic.provider.spec.ts. Real DB + full
+ * audit-log persistence is covered in the integration specs.
  */
 
 interface FakeRun {
@@ -59,11 +58,7 @@ function makeFakePrisma(seed: FakeRun) {
     },
     modelCall: {
       create: vi.fn(
-        async ({
-          data,
-        }: {
-          data: Omit<FakeModelCall, 'id' | 'at'>;
-        }) => {
+        async ({ data }: { data: Omit<FakeModelCall, 'id' | 'at'> }) => {
           const row: FakeModelCall = {
             id: `mc-${++mcIdCounter}`,
             at: new Date(),
@@ -79,31 +74,29 @@ function makeFakePrisma(seed: FakeRun) {
   };
 }
 
-function fakeMessage(
+/** A neutral provider response. */
+function fakeResult(
   inputTokens: number,
   outputTokens: number,
-  stopReason: 'end_turn' | 'tool_use' | 'max_tokens' = 'end_turn',
-): Anthropic.Message {
+  stopReason: StopReason = 'end',
+): CreateMessageResult {
   return {
-    id: 'msg-1',
-    type: 'message',
-    role: 'assistant',
     content: [{ type: 'text', text: 'response text' }],
+    stopReason,
+    usage: { inputTokens, outputTokens },
     model: 'claude-sonnet-4-6',
-    stop_reason: stopReason,
-    stop_sequence: null,
-    usage: {
-      input_tokens: inputTokens,
-      output_tokens: outputTokens,
-    },
   };
 }
 
-function makeFakeAnthropic(message: Anthropic.Message): AnthropicMessagesClient {
+/** A fake LlmProvider whose createMessage returns a fixed neutral result. */
+function makeFakeProvider(
+  result: CreateMessageResult,
+  create = vi.fn(async () => result),
+): LlmProvider & { createMessage: typeof create } {
   return {
-    messages: {
-      create: vi.fn(async () => message),
-    } as unknown as Anthropic['messages'],
+    name: 'fake',
+    capabilities: { toolUse: true, parallelToolUse: true, caching: false },
+    createMessage: create,
   };
 }
 
@@ -121,13 +114,15 @@ beforeEach(() => {
 describe('callModel — happy path', () => {
   it('returns the message + persists a ModelCall + bumps AgentRun.costCents', async () => {
     const prisma = makeFakePrisma(BASE_RUN);
-    const anthropic = makeFakeAnthropic(fakeMessage(1000, 500));
+    const provider = makeFakeProvider(fakeResult(1000, 500));
 
-    const result = await callModel(prisma as never, anthropic, {
+    const result = await callModel(prisma as never, provider, {
       runId: 'run-1',
       modelName: 'claude-sonnet-4-6',
       systemPrompt: 'You are a researcher.',
-      messages: [{ role: 'user', content: 'Tell me about Acme.' }],
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'Tell me about Acme.' }] },
+      ],
       budgetCents: 100,
     });
 
@@ -149,13 +144,13 @@ describe('callModel — happy path', () => {
 
   it('bumps AgentRun.lastBeatAt on every call (heartbeat for reaper)', async () => {
     const prisma = makeFakePrisma(BASE_RUN);
-    const anthropic = makeFakeAnthropic(fakeMessage(100, 50));
+    const provider = makeFakeProvider(fakeResult(100, 50));
 
-    await callModel(prisma as never, anthropic, {
+    await callModel(prisma as never, provider, {
       runId: 'run-1',
       modelName: 'claude-sonnet-4-6',
       systemPrompt: 's',
-      messages: [{ role: 'user', content: 'x' }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'x' }] }],
       budgetCents: 100,
     });
 
@@ -165,20 +160,20 @@ describe('callModel — happy path', () => {
 
   it('accumulates costCents across multiple calls', async () => {
     const prisma = makeFakePrisma(BASE_RUN);
-    const anthropic = makeFakeAnthropic(fakeMessage(1000, 500));
+    const provider = makeFakeProvider(fakeResult(1000, 500));
 
-    await callModel(prisma as never, anthropic, {
+    await callModel(prisma as never, provider, {
       runId: 'run-1',
       modelName: 'claude-sonnet-4-6',
       systemPrompt: 's',
-      messages: [{ role: 'user', content: 'a' }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'a' }] }],
       budgetCents: 100,
     });
-    await callModel(prisma as never, anthropic, {
+    await callModel(prisma as never, provider, {
       runId: 'run-1',
       modelName: 'claude-sonnet-4-6',
       systemPrompt: 's',
-      messages: [{ role: 'user', content: 'b' }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'b' }] }],
       budgetCents: 100,
     });
 
@@ -186,25 +181,22 @@ describe('callModel — happy path', () => {
     expect(prisma._modelCalls).toHaveLength(2);
   });
 
-  it('forwards system prompt, messages, tools, max_tokens, tool_choice to SDK', async () => {
+  it('forwards neutral params (model, prompt, messages, tools, maxTokens, toolChoice) to the provider', async () => {
     const prisma = makeFakePrisma(BASE_RUN);
-    const message = fakeMessage(10, 10);
-    const create = vi.fn(async () => message);
-    const anthropic: AnthropicMessagesClient = {
-      messages: { create } as unknown as Anthropic['messages'],
-    };
-    const tools: Anthropic.Tool[] = [
+    const create = vi.fn(async () => fakeResult(10, 10));
+    const provider = makeFakeProvider(fakeResult(10, 10), create);
+    const tools = [
       {
         name: 'brave_search',
         description: 'web search',
-        input_schema: { type: 'object', properties: {} },
+        inputSchema: { type: 'object', properties: {} },
       },
     ];
-    await callModel(prisma as never, anthropic, {
+    await callModel(prisma as never, provider, {
       runId: 'run-1',
       modelName: 'claude-sonnet-4-6',
       systemPrompt: 'sys',
-      messages: [{ role: 'user', content: 'hello' }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
       tools,
       maxTokens: 2048,
       toolChoice: { type: 'tool', name: 'brave_search' },
@@ -213,47 +205,43 @@ describe('callModel — happy path', () => {
 
     expect(create).toHaveBeenCalledWith({
       model: 'claude-sonnet-4-6',
-      system: 'sys',
-      messages: [{ role: 'user', content: 'hello' }],
+      systemPrompt: 'sys',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
       tools,
-      max_tokens: 2048,
-      tool_choice: { type: 'tool', name: 'brave_search' },
+      maxTokens: 2048,
+      toolChoice: { type: 'tool', name: 'brave_search' },
     });
   });
 
-  it('defaults max_tokens to 4096 when not provided', async () => {
+  it('forwards undefined maxTokens (provider applies its own default)', async () => {
     const prisma = makeFakePrisma(BASE_RUN);
-    const create = vi.fn(async () => fakeMessage(10, 10));
-    const anthropic: AnthropicMessagesClient = {
-      messages: { create } as unknown as Anthropic['messages'],
-    };
-    await callModel(prisma as never, anthropic, {
+    const create = vi.fn(async () => fakeResult(10, 10));
+    const provider = makeFakeProvider(fakeResult(10, 10), create);
+    await callModel(prisma as never, provider, {
       runId: 'run-1',
       modelName: 'claude-sonnet-4-6',
       systemPrompt: 's',
-      messages: [{ role: 'user', content: 'x' }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'x' }] }],
       budgetCents: 100,
     });
     expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({ max_tokens: 4096 }),
+      expect.objectContaining({ maxTokens: undefined }),
     );
   });
 });
 
 describe('callModel — preflight + budget enforcement', () => {
-  it('throws when AgentRun does not exist (no SDK call made)', async () => {
+  it('throws when AgentRun does not exist (no provider call made)', async () => {
     const prisma = makeFakePrisma(BASE_RUN);
-    const create = vi.fn();
-    const anthropic: AnthropicMessagesClient = {
-      messages: { create } as unknown as Anthropic['messages'],
-    };
+    const create = vi.fn(async () => fakeResult(10, 10));
+    const provider = makeFakeProvider(fakeResult(10, 10), create);
 
     await expect(
-      callModel(prisma as never, anthropic, {
+      callModel(prisma as never, provider, {
         runId: 'does-not-exist',
         modelName: 'claude-sonnet-4-6',
         systemPrompt: 's',
-        messages: [{ role: 'user', content: 'x' }],
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'x' }] }],
         budgetCents: 100,
       }),
     ).rejects.toThrow('AgentRun does-not-exist not found');
@@ -262,35 +250,33 @@ describe('callModel — preflight + budget enforcement', () => {
 
   it('pre-check: throws when run.costCents already at or over budget', async () => {
     const prisma = makeFakePrisma({ ...BASE_RUN, costCents: 100 });
-    const create = vi.fn(async () => fakeMessage(10, 10));
-    const anthropic: AnthropicMessagesClient = {
-      messages: { create } as unknown as Anthropic['messages'],
-    };
+    const create = vi.fn(async () => fakeResult(10, 10));
+    const provider = makeFakeProvider(fakeResult(10, 10), create);
 
     await expect(
-      callModel(prisma as never, anthropic, {
+      callModel(prisma as never, provider, {
         runId: 'run-1',
         modelName: 'claude-sonnet-4-6',
         systemPrompt: 's',
-        messages: [{ role: 'user', content: 'x' }],
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'x' }] }],
         budgetCents: 50,
       }),
     ).rejects.toBeInstanceOf(BudgetExceededError);
-    // Did NOT consume an SDK call.
+    // Did NOT consume a provider call.
     expect(create).not.toHaveBeenCalled();
   });
 
   it('post-check: throws when this call pushes over, BUT persists ModelCall first', async () => {
     const prisma = makeFakePrisma({ ...BASE_RUN, costCents: 0 });
     // 1M input + 1M output at sonnet = 1800 cents
-    const anthropic = makeFakeAnthropic(fakeMessage(1_000_000, 1_000_000));
+    const provider = makeFakeProvider(fakeResult(1_000_000, 1_000_000));
 
     await expect(
-      callModel(prisma as never, anthropic, {
+      callModel(prisma as never, provider, {
         runId: 'run-1',
         modelName: 'claude-sonnet-4-6',
         systemPrompt: 's',
-        messages: [{ role: 'user', content: 'x' }],
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'x' }] }],
         budgetCents: 100,
       }),
     ).rejects.toBeInstanceOf(BudgetExceededError);
@@ -305,14 +291,14 @@ describe('callModel — preflight + budget enforcement', () => {
   it('post-check passes when current + new cost exactly equals budget', async () => {
     const prisma = makeFakePrisma({ ...BASE_RUN, costCents: 98 });
     // Cost 2¢ → 98 + 2 = 100 = budget.
-    const anthropic = makeFakeAnthropic(fakeMessage(1000, 500));
+    const provider = makeFakeProvider(fakeResult(1000, 500));
 
     await expect(
-      callModel(prisma as never, anthropic, {
+      callModel(prisma as never, provider, {
         runId: 'run-1',
         modelName: 'claude-sonnet-4-6',
         systemPrompt: 's',
-        messages: [{ role: 'user', content: 'x' }],
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'x' }] }],
         budgetCents: 100,
       }),
     ).resolves.toMatchObject({ costCents: 2 });

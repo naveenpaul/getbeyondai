@@ -1,5 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
-import type { AnthropicMessagesClient } from '../runtime/call-model';
+import type { LlmProvider } from '../runtime/llm-provider';
 import { runAgent, type RunAgentResult } from '../runtime/tool-use-loop';
 import type { AgentTool } from '../runtime/agent-tool';
 import { braveSearchTool } from '../runtime/tools/brave-search';
@@ -54,7 +54,7 @@ export interface ResearchInput {
 
 export interface ResearchDeps {
   prisma: PrismaClient;
-  anthropic: AnthropicMessagesClient;
+  llm: LlmProvider;
   /** Optional tool overrides for tests (default: brave + fetch). */
   tools?: AgentTool[];
   /**
@@ -109,7 +109,7 @@ export async function runResearch(
     maxToolCalls: input.maxToolCalls ?? DEFAULTS.maxToolCalls,
     maxWallSecs: input.maxWallSecs ?? DEFAULTS.maxWallSecs,
     prisma: deps.prisma,
-    anthropic: deps.anthropic,
+    llm: deps.llm,
     emitEvent: deps.emitEvent,
   });
 

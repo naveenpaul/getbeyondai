@@ -2,10 +2,8 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
 import { QueueModule } from '../queue/queue.module';
-import {
-  ANTHROPIC_CLIENT,
-  createAnthropicClient,
-} from './runtime/call-model';
+import { LLM_PROVIDER } from './runtime/llm-provider';
+import { createAnthropicProvider } from './runtime/providers/anthropic.provider';
 import {
   InMemoryRunEventBus,
   RUN_EVENT_BUS,
@@ -28,17 +26,24 @@ import { SdrDrafterWorker } from './sdr-drafter/sdr-drafter.worker';
   controllers: [ResearcherController, SdrDrafterController],
   providers: [
     {
-      provide: ANTHROPIC_CLIENT,
+      // P1: single Anthropic provider built from env. Later phases replace
+      // this with a registry/resolver that builds a per-run, per-org provider
+      // bound to the resolved (BYO or env) key.
+      provide: LLM_PROVIDER,
       useFactory: () =>
-        createAnthropicClient(process.env.ANTHROPIC_API_KEY ?? ''),
+        createAnthropicProvider(process.env.ANTHROPIC_API_KEY ?? ''),
     },
     {
+      // useFactory, not useClass: the constructor takes an options bag
+      // (`opts: { bufferCleanupMs? } = {}`), which NestJS would try to
+      // DI-resolve as a provider named `Object` and fail. The options
+      // default to {}, so construct it directly.
       provide: RUN_EVENT_BUS,
-      useClass: InMemoryRunEventBus,
+      useFactory: () => new InMemoryRunEventBus(),
     },
     ResearcherWorker,
     SdrDrafterWorker,
   ],
-  exports: [ANTHROPIC_CLIENT, RUN_EVENT_BUS],
+  exports: [LLM_PROVIDER, RUN_EVENT_BUS],
 })
 export class TeammatesModule {}

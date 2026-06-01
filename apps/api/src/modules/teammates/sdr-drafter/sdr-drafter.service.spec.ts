@@ -30,7 +30,7 @@ vi.mock('../runtime/tool-use-loop', () => ({
 }));
 
 import { runSdrDrafter } from './sdr-drafter.service';
-import type { AnthropicMessagesClient } from '../runtime/call-model';
+import type { LlmProvider } from '../runtime/llm-provider';
 import type { AgentTool } from '../runtime/agent-tool';
 
 type ContactFixture = {
@@ -46,8 +46,8 @@ function makeDeps(contact: ContactFixture) {
   const prisma = {
     contact: { findFirstOrThrow },
   } as unknown as Parameters<typeof runSdrDrafter>[0]['prisma'];
-  const anthropic = {} as AnthropicMessagesClient;
-  return { prisma, anthropic, findFirstOrThrow };
+  const llm = {} as LlmProvider;
+  return { prisma, llm, findFirstOrThrow };
 }
 
 describe('runSdrDrafter', () => {
