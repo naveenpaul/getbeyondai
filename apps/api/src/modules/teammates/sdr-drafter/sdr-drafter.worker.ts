@@ -1,9 +1,12 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { QueueService } from '../../queue/queue.service';
-import { LLM_PROVIDER, type LlmProvider } from '../runtime/llm-provider';
+import { LlmResolver } from '../runtime/llm-resolver';
 import { RUN_EVENT_BUS, type RunEventBus } from '../runtime/run-event-bus';
 import { runSdrDrafter } from './sdr-drafter.service';
+
+/** OrgTeammateConfig routing key for the SDR Drafter. */
+const SDR_DRAFTER_TEAMMATE = 'sdr-drafter';
 
 export const SDR_DRAFTER_RUN_QUEUE = 'sdr-drafter-run';
 
@@ -27,18 +30,18 @@ export class SdrDrafterWorker implements OnModuleInit {
   private readonly logger = new Logger(SdrDrafterWorker.name);
   private readonly queue: QueueService;
   private readonly prisma: PrismaService;
-  private readonly llm: LlmProvider;
+  private readonly resolver: LlmResolver;
   private readonly eventBus: RunEventBus;
 
   constructor(
     @Inject(QueueService) queue: QueueService,
     @Inject(PrismaService) prisma: PrismaService,
-    @Inject(LLM_PROVIDER) llm: LlmProvider,
+    @Inject(LlmResolver) resolver: LlmResolver,
     @Inject(RUN_EVENT_BUS) eventBus: RunEventBus,
   ) {
     this.queue = queue;
     this.prisma = prisma;
-    this.llm = llm;
+    this.resolver = resolver;
     this.eventBus = eventBus;
   }
 
@@ -51,10 +54,14 @@ export class SdrDrafterWorker implements OnModuleInit {
             `(contact=${job.data.contactId})`,
         );
         try {
+          const { provider, modelPrimary } = await this.resolver.resolve(
+            job.data.orgId,
+            SDR_DRAFTER_TEAMMATE,
+          );
           const result = await runSdrDrafter(
             {
               prisma: this.prisma,
-              llm: this.llm,
+              llm: provider,
               emitEvent: (event) => this.eventBus.publish(event),
             },
             {
@@ -64,6 +71,7 @@ export class SdrDrafterWorker implements OnModuleInit {
               contactId: job.data.contactId,
               briefDraftId: job.data.briefDraftId,
               goal: job.data.goal,
+              modelName: modelPrimary,
               budgetCents: job.data.budgetCents,
             },
           );

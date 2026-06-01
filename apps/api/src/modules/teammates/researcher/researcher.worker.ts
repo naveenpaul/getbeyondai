@@ -1,9 +1,12 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { QueueService } from '../../queue/queue.service';
-import { LLM_PROVIDER, type LlmProvider } from '../runtime/llm-provider';
+import { LlmResolver } from '../runtime/llm-resolver';
 import { RUN_EVENT_BUS, type RunEventBus } from '../runtime/run-event-bus';
 import { runResearch } from './researcher.service';
+
+/** OrgTeammateConfig routing key for the Researcher. */
+const RESEARCHER_TEAMMATE = 'researcher';
 
 export const RESEARCHER_RUN_QUEUE = 'researcher-run';
 
@@ -38,18 +41,18 @@ export class ResearcherWorker implements OnModuleInit {
   private readonly logger = new Logger(ResearcherWorker.name);
   private readonly queue: QueueService;
   private readonly prisma: PrismaService;
-  private readonly llm: LlmProvider;
+  private readonly resolver: LlmResolver;
   private readonly eventBus: RunEventBus;
 
   constructor(
     @Inject(QueueService) queue: QueueService,
     @Inject(PrismaService) prisma: PrismaService,
-    @Inject(LLM_PROVIDER) llm: LlmProvider,
+    @Inject(LlmResolver) resolver: LlmResolver,
     @Inject(RUN_EVENT_BUS) eventBus: RunEventBus,
   ) {
     this.queue = queue;
     this.prisma = prisma;
-    this.llm = llm;
+    this.resolver = resolver;
     this.eventBus = eventBus;
   }
 
@@ -62,10 +65,17 @@ export class ResearcherWorker implements OnModuleInit {
             `(target=${truncate(job.data.target, 60)})`,
         );
         try {
+          // Resolve the per-run provider (org BYO key → env → block) inside the
+          // try: a "no key configured" failure surfaces as run_failed on the
+          // stream so the user is told to add a key in Settings → AI.
+          const { provider, modelPrimary } = await this.resolver.resolve(
+            job.data.orgId,
+            RESEARCHER_TEAMMATE,
+          );
           const result = await runResearch(
             {
               prisma: this.prisma,
-              llm: this.llm,
+              llm: provider,
               emitEvent: (event) => this.eventBus.publish(event),
             },
             {
@@ -73,6 +83,7 @@ export class ResearcherWorker implements OnModuleInit {
               orgId: job.data.orgId,
               triggeredBy: job.data.triggeredBy,
               target: job.data.target,
+              modelName: modelPrimary,
               budgetCents: job.data.budgetCents,
             },
           );
