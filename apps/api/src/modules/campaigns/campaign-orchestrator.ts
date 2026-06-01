@@ -102,6 +102,8 @@ export interface OrchestrateCampaignInput {
   budgetCents?: number;
   candidateLimit?: number;
   concurrency?: number;
+  /** Resolved model (P5); defaults to the campaign default when absent. */
+  modelName?: string;
 }
 
 export interface CampaignOrchestratorDeps {
@@ -145,6 +147,10 @@ interface QualifiedOutcome {
 
 export class CampaignOrchestrator {
   private readonly deps: CampaignOrchestratorDeps;
+  // Resolved model for this run (set at run() start). Safe as instance state:
+  // the orchestrator is constructed per-run, run() is called once, and every
+  // candidate in a run uses the same model.
+  private modelName: string = CAMPAIGN_DEFAULTS.modelName;
 
   constructor(deps: CampaignOrchestratorDeps) {
     this.deps = deps;
@@ -165,6 +171,7 @@ export class CampaignOrchestrator {
     const candidateLimit =
       input.candidateLimit ?? CAMPAIGN_DEFAULTS.candidateLimit;
     const concurrency = input.concurrency ?? CAMPAIGN_DEFAULTS.concurrency;
+    this.modelName = input.modelName ?? CAMPAIGN_DEFAULTS.modelName;
 
     this.deps.emitEvent(campaignStarted(campaignId, input.goal));
 
@@ -285,7 +292,7 @@ export class CampaignOrchestrator {
     try {
       const result = await callModel(this.deps.prisma, this.deps.llm, {
         runId: run.id,
-        modelName: CAMPAIGN_DEFAULTS.modelName,
+        modelName: this.modelName,
         systemPrompt: ICP_DERIVATION_SYSTEM_PROMPT,
         messages: [
           {
@@ -496,6 +503,7 @@ export class CampaignOrchestrator {
           orgId: params.orgId,
           triggeredBy: params.triggeredBy,
           target,
+          modelName: this.modelName,
           budgetCents: params.budgetCents,
         },
       );
@@ -572,7 +580,7 @@ export class CampaignOrchestrator {
     try {
       const result = await callModel(this.deps.prisma, this.deps.llm, {
         runId: params.runId,
-        modelName: CAMPAIGN_DEFAULTS.modelName,
+        modelName: this.modelName,
         systemPrompt: CANDIDATE_SCORING_SYSTEM_PROMPT,
         messages: [
           {

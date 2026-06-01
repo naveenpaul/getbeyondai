@@ -2,14 +2,17 @@ import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import type { CampaignEvent, SourcingConfig } from '@getbeyond/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
-import { LLM_PROVIDER, type LlmProvider } from '../teammates/runtime/llm-provider';
+import { LlmResolver } from '../teammates/runtime/llm-resolver';
 import {
   RUN_EVENT_BUS,
   type RunEventBus,
 } from '../teammates/runtime/run-event-bus';
 import { ContactListSourcingProvider } from '../connectors/sourcing/contact-list-sourcing.provider';
 import type { SourcingProvider } from '../connectors/sourcing/sourcing-provider';
-import { CampaignOrchestrator } from './campaign-orchestrator';
+import {
+  CampaignOrchestrator,
+  CAMPAIGN_TEAMMATE,
+} from './campaign-orchestrator';
 import { campaignFailed, toBusEvent } from './campaign-events';
 
 export const CAMPAIGN_RUN_QUEUE = 'campaign-run';
@@ -46,18 +49,18 @@ export class CampaignWorker implements OnModuleInit {
   private readonly logger = new Logger(CampaignWorker.name);
   private readonly queue: QueueService;
   private readonly prisma: PrismaService;
-  private readonly llm: LlmProvider;
+  private readonly resolver: LlmResolver;
   private readonly eventBus: RunEventBus;
 
   constructor(
     @Inject(QueueService) queue: QueueService,
     @Inject(PrismaService) prisma: PrismaService,
-    @Inject(LLM_PROVIDER) llm: LlmProvider,
+    @Inject(LlmResolver) resolver: LlmResolver,
     @Inject(RUN_EVENT_BUS) eventBus: RunEventBus,
   ) {
     this.queue = queue;
     this.prisma = prisma;
-    this.llm = llm;
+    this.resolver = resolver;
     this.eventBus = eventBus;
   }
 
@@ -69,24 +72,31 @@ export class CampaignWorker implements OnModuleInit {
         this.logger.log(
           `processing campaign-run job ${job.id} for Campaign ${data.campaignId}`,
         );
-        const orchestrator = new CampaignOrchestrator({
-          prisma: this.prisma,
-          llm: this.llm,
-          buildSourcingProvider: (orgId) =>
-            buildSourcingProvider(this.prisma, orgId, data.sourcing),
-          // CampaignEvents ride the same bus the teammate runtime uses.
-          // toBusEvent stamps runId=campaignId so the bus (which routes by
-          // runId) delivers them to the stream subscribed by campaignId.
-          emitEvent: (event: CampaignEvent) =>
-            this.eventBus.publish(toBusEvent(event)),
-        });
         try {
+          // Resolve the per-run provider (org BYO → env → block). A "no key"
+          // failure is caught below → campaign_failed on the stream.
+          const { provider, modelPrimary } = await this.resolver.resolve(
+            data.orgId,
+            CAMPAIGN_TEAMMATE,
+          );
+          const orchestrator = new CampaignOrchestrator({
+            prisma: this.prisma,
+            llm: provider,
+            buildSourcingProvider: (orgId) =>
+              buildSourcingProvider(this.prisma, orgId, data.sourcing),
+            // CampaignEvents ride the same bus the teammate runtime uses.
+            // toBusEvent stamps runId=campaignId so the bus (which routes by
+            // runId) delivers them to the stream subscribed by campaignId.
+            emitEvent: (event: CampaignEvent) =>
+              this.eventBus.publish(toBusEvent(event)),
+          });
           const result = await orchestrator.run({
             campaignId: data.campaignId,
             orgId: data.orgId,
             triggeredBy: data.triggeredBy,
             goal: data.goal,
             winsListId: data.winsListId,
+            modelName: modelPrimary,
             budgetCents: data.budgetCents,
           });
           this.logger.log(
