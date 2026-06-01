@@ -31,6 +31,12 @@
       "require": "./dist/sdr-drafter-contracts.js",
       "import": "./dist/sdr-drafter-contracts.js",
       "default": "./dist/sdr-drafter-contracts.js"
+    },
+    "./campaign-contracts": {
+      "types": "./dist/campaign-contracts.d.ts",
+      "require": "./dist/campaign-contracts.js",
+      "import": "./dist/campaign-contracts.js",
+      "default": "./dist/campaign-contracts.js"
     }
   },
   "scripts": {

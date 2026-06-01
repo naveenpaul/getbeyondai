@@ -493,10 +493,31 @@ model Campaign {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  org        Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  candidates CampaignCandidate[]
 
   @@index([orgId, status])
   @@map("campaigns")
+}
+
+// A sourced company qualified + scored against the campaign ICP. The cited
+// firmographic signals live on the linked Researcher Draft (cite-or-abstain
+// enforced by the runtime); fitScore + rationale are the orchestrator's ranking.
+model CampaignCandidate {
+  id          String   @id @default(cuid())
+  campaignId  String
+  name        String
+  domain      String?
+  linkedinUrl String?
+  fitScore    Float
+  rationale   String
+  draftId     String? // the Researcher's cited brief for this candidate
+  createdAt   DateTime @default(now())
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@map("campaign_candidates")
 }
 
 // ============================================================================
