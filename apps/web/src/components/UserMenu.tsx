@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { LogOut, Users } from 'lucide-react';
+import { LogOut, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { signOut } from '@/lib/auth-client';
 import { useIdentity } from '@/lib/use-identity';
@@ -25,8 +25,8 @@ export function UserMenu(): React.JSX.Element | null {
       <span className="text-muted-foreground">{identity?.email ?? ''}</span>
       <Button asChild size="sm" variant="ghost">
         <Link href="/settings/team">
-          <Users className="h-3.5 w-3.5" />
-          Team
+          <Settings className="h-3.5 w-3.5" />
+          Settings
         </Link>
       </Button>
       <Button
