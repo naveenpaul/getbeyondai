@@ -6,6 +6,7 @@ import { OrgContextModule } from './common/org-context/org-context.module';
 import { QueueModule } from './modules/queue/queue.module';
 import { StorageModule } from './modules/storage/storage.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { CampaignsModule } from './modules/campaigns/campaigns.module';
 import { ConnectorsModule } from './modules/connectors/connectors.module';
 import { ContactsModule } from './modules/contacts/contacts.module';
 import { DraftsModule } from './modules/drafts/drafts.module';
@@ -30,6 +31,7 @@ import { TeammatesModule } from './modules/teammates/teammates.module';
     InvitesModule,
     ReapersModule,
     TeammatesModule,
+    CampaignsModule,
     // Feature modules land as we implement them:
     //   teammates (runtime + researcher + sdr-drafter + content-drafter)
     //   company-brain, contacts, drafts, fetch, audit, auth, integrations
