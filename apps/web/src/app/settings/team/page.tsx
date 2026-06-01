@@ -60,9 +60,7 @@ export default function TeamSettingsPage(): React.JSX.Element {
   const canInviteAdmin = myRole === 'owner';
 
   return (
-    <main className="container space-y-6 py-12">
-      <h1 className="text-2xl font-semibold">Team</h1>
-
+    <div className="space-y-6">
       {error ? (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
           {error}
@@ -140,7 +138,7 @@ export default function TeamSettingsPage(): React.JSX.Element {
           </CardContent>
         </Card>
       ) : null}
-    </main>
+    </div>
   );
 }
 

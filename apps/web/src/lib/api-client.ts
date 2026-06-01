@@ -4,12 +4,17 @@ import type {
   ContactListsResponse,
   CreateCampaignRequest,
   CreateCampaignResponse,
+  LlmSettingsResponse,
   ResearcherRunEnqueueResponse,
   ResearcherRunRequest,
   ResearcherRunStatusResponse,
+  SaveLlmCredentialRequest,
+  SaveLlmCredentialResponse,
+  SaveLlmRoutingRequest,
   SdrDrafterRunEnqueueResponse,
   SdrDrafterRunRequest,
   SdrDrafterRunStatusResponse,
+  TeammateRoutingConfig,
 } from '@getbeyond/shared';
 import { env } from './env';
 
@@ -490,4 +495,44 @@ export async function switchActiveOrg(orgId: string): Promise<MeResponse> {
   });
   if (!res.ok) await readError(res);
   return res.json() as Promise<MeResponse>;
+}
+
+// ─── LLM settings (BYO-key) ─────────────────────────────────────────────────
+//
+// The org brings its own provider key and routes each teammate to a
+// provider/model. The API NEVER returns a stored key — only whether one is
+// configured (status), so nothing here ever surfaces a secret.
+
+export async function getLlmSettings(): Promise<LlmSettingsResponse> {
+  const res = await fetch(`${env.apiUrl}/settings/llm`, {
+    credentials: 'include',
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<LlmSettingsResponse>;
+}
+
+export async function saveLlmCredential(
+  req: SaveLlmCredentialRequest,
+): Promise<SaveLlmCredentialResponse> {
+  const res = await fetch(`${env.apiUrl}/settings/llm/credentials`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<SaveLlmCredentialResponse>;
+}
+
+export async function saveLlmRouting(
+  req: SaveLlmRoutingRequest,
+): Promise<TeammateRoutingConfig> {
+  const res = await fetch(`${env.apiUrl}/settings/llm/routing`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<TeammateRoutingConfig>;
 }
