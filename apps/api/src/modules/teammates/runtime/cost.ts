@@ -29,6 +29,12 @@ export const MODEL_PRICING: Record<string, ModelRate> = {
   'claude-opus-4-7': { inputPerMillion: 15, outputPerMillion: 75 },
   'claude-sonnet-4-6': { inputPerMillion: 3, outputPerMillion: 15 },
   'claude-haiku-4-5-20251001': { inputPerMillion: 0.8, outputPerMillion: 4 },
+  // OpenAI published rates (approximate — CONFIRM before relying on billing).
+  // Required so a teammate routed to OpenAI (default gpt-4.1 / gpt-4.1-mini)
+  // prices its calls instead of throwing UnknownModelError mid-run. Model names
+  // are globally unique (claude-* vs gpt-*), so the flat map is unambiguous.
+  'gpt-4.1': { inputPerMillion: 2, outputPerMillion: 8 },
+  'gpt-4.1-mini': { inputPerMillion: 0.4, outputPerMillion: 1.6 },
 };
 
 /**
