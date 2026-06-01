@@ -35,12 +35,35 @@ export interface CreateCampaignRequest {
   goal: string;
   /** Optional display title; the server derives one from `goal` if omitted. */
   title?: string;
-  /** ContactList of closed-won accounts the ICP is derived from. */
+  /** ContactList of closed-won accounts the ICP is derived from. Optional. */
   winsListId?: string | null;
-  /** Where candidate companies come from. */
-  sourcing: SourcingConfig;
+  /**
+   * Where candidate companies come from. OPTIONAL: a campaign can start with
+   * just a goal — it derives + shows the ICP and then prompts for a source.
+   * Attach a list (pick existing / CSV import / HubSpot) to find candidates.
+   */
+  sourcing?: SourcingConfig | null;
   /** Per-campaign hard cost cap (cents). */
   budgetCents?: number;
+}
+
+// ─── GET /contacts/lists (source/wins picker) ───────────────────────
+//
+// Powers the campaign composer's list pickers so users select a list instead
+// of pasting a raw id. CSV-imported and HubSpot-synced lists both appear,
+// distinguished by `source` (e.g. "csv:upload:…", "hubspot:list:…").
+
+export interface ContactListSummary {
+  id: string;
+  name: string;
+  contactCount: number;
+  /** Provenance tag, e.g. "csv:upload:abc" | "hubspot:list:xyz". */
+  source: string;
+  createdAt: string;
+}
+
+export interface ContactListsResponse {
+  items: ContactListSummary[];
 }
 
 export interface CreateCampaignResponse {

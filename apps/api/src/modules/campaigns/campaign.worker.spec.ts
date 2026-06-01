@@ -28,4 +28,8 @@ describe('buildSourcingProvider', () => {
       }),
     ).toThrow(/not configured/i);
   });
+
+  it('returns null when no source is attached (sourcing optional)', () => {
+    expect(buildSourcingProvider(prisma, 'org-1', null)).toBeNull();
+  });
 });

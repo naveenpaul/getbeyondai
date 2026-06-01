@@ -26,7 +26,9 @@ export const CreateCampaignRequestSchema = z.object({
   goal: z.string().min(1, 'goal is required'),
   title: z.string().min(1).optional(),
   winsListId: z.string().min(1).nullable().optional(),
-  sourcing: SourcingConfigSchema,
+  // Optional: a campaign can start with just a goal (derives + shows the ICP,
+  // then prompts for a source). Attach a list to find candidates.
+  sourcing: SourcingConfigSchema.nullable().optional(),
   budgetCents: z.number().int().min(1).max(100_000).optional(),
 }) satisfies z.ZodType<CreateCampaignRequest>;
 

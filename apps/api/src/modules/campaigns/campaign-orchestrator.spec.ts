@@ -316,6 +316,57 @@ describe('CampaignOrchestrator', () => {
 
   const types = (): string[] => events.map((e) => e.type);
 
+  describe('run() with no source attached (optional sourcing)', () => {
+    it('derives the ICP, completes with 0 candidates, and prompts for a source', async () => {
+      const prisma = makeFakePrisma();
+      const llm = makeFakeLlm((i) => {
+        if (i === 0) return { text: icpJson() };
+        throw new Error('no scoring call should happen without a source');
+      });
+
+      const orchestrator = new CampaignOrchestrator({
+        prisma,
+        llm,
+        // No source attached.
+        buildSourcingProvider: () => null,
+        emitEvent,
+        runResearch: makeRunResearch(() => researchCompleted('unused')),
+      });
+
+      const result = await orchestrator.run({
+        campaignId: 'camp-1',
+        orgId: 'org-1',
+        triggeredBy: 'user-1',
+        goal: 'Find lookalikes',
+        winsListId: null,
+        budgetCents: 1000,
+      });
+
+      expect(result).toEqual({
+        status: 'completed',
+        candidateCount: 0,
+        costCents: 0,
+      });
+      // ICP is still derived + shown; no sourcing_started / candidate_qualified.
+      expect(types()).toEqual([
+        'campaign_started',
+        'icp_derived',
+        'sourcing_completed',
+        'campaign_completed',
+      ]);
+      const sourcing = events.find((e) => e.type === 'sourcing_completed');
+      expect(sourcing).toBeDefined();
+      if (sourcing?.type === 'sourcing_completed') {
+        expect(sourcing.data.candidateCount).toBe(0);
+        expect(sourcing.data.summary).toMatch(/no candidate source/i);
+      }
+      expect(prisma._campaignUpdates).toContainEqual({
+        id: 'camp-1',
+        status: 'completed',
+      });
+    });
+  });
+
   describe('run() happy path', () => {
     it('emits the pipeline events in order, ranks by fitScore desc, and marks completed', async () => {
       const prisma = makeFakePrisma({

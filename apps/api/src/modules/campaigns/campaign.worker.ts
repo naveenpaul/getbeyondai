@@ -37,7 +37,7 @@ export interface CampaignRunJobPayload {
   triggeredBy: string;
   goal: string;
   winsListId: string | null;
-  sourcing: SourcingConfig;
+  sourcing: SourcingConfig | null;
   budgetCents?: number;
 }
 
@@ -108,6 +108,8 @@ export class CampaignWorker implements OnModuleInit {
 
 /**
  * Build the sourcing provider for a campaign from its SourcingConfig.
+ *   - null → no source attached; returns null. The orchestrator derives the ICP
+ *     and prompts for a source instead of qualifying (sourcing is optional).
  *   - contact_list → the no-key ContactListSourcingProvider (ships today).
  *   - apollo → reserved; throws a clear "not configured" error. The vendor SDK
  *     would live behind an adapter per invariant #5 when it lands.
@@ -115,8 +117,11 @@ export class CampaignWorker implements OnModuleInit {
 export function buildSourcingProvider(
   prisma: PrismaService,
   orgId: string,
-  sourcing: SourcingConfig,
-): SourcingProvider {
+  sourcing: SourcingConfig | null,
+): SourcingProvider | null {
+  if (sourcing === null) {
+    return null;
+  }
   if (sourcing.provider === 'contact_list') {
     return new ContactListSourcingProvider(prisma, orgId, sourcing.listId);
   }

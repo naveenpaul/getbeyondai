@@ -112,7 +112,7 @@ export interface CampaignOrchestratorDeps {
    * concrete `ContactListSourcingProvider`; tests pass a fake. Throws a clear
    * "not configured" error for reserved providers (e.g. apollo).
    */
-  buildSourcingProvider: (orgId: string) => SourcingProvider;
+  buildSourcingProvider: (orgId: string) => SourcingProvider | null;
   /**
    * Forwards a campaign event onto the bus. The worker wires this to the
    * RunEventBus; tests capture into an array.
@@ -179,8 +179,27 @@ export class CampaignOrchestrator {
       );
       this.deps.emitEvent(icpDerived(campaignId, derived.summary));
 
-      // ── 2. Source candidate pool ────────────────────────────────────
+      // ── 2. Source candidate pool (optional) ─────────────────────────
       const provider = this.deps.buildSourcingProvider(input.orgId);
+      if (provider === null) {
+        // No source attached: the ICP is derived + shown, but there's no pool
+        // to qualify. Complete gracefully and prompt the user to add a source
+        // rather than failing. (ICP-derivation cost is audited on its own
+        // AgentRun; the campaign total is 0 here since no qualify ran.)
+        this.deps.emitEvent(
+          sourcingCompleted(
+            campaignId,
+            'No candidate source attached — add a list (CSV import or HubSpot) to find matching companies.',
+            0,
+          ),
+        );
+        await this.deps.prisma.campaign.update({
+          where: { id: campaignId },
+          data: { status: 'completed' },
+        });
+        this.deps.emitEvent(campaignCompleted(campaignId, 0, 0));
+        return { status: 'completed', candidateCount: 0, costCents: 0 };
+      }
       this.deps.emitEvent(sourcingStarted(campaignId, provider.name));
       const opts: FindCandidatesOptions = { limit: candidateLimit };
       const sourced = await provider.findCandidates(derived.icp, opts);

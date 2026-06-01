@@ -71,7 +71,7 @@ export class CampaignService {
       triggeredBy: createdBy,
       goal: req.goal,
       winsListId,
-      sourcing: req.sourcing,
+      sourcing: req.sourcing ?? null,
       budgetCents: req.budgetCents,
     });
 

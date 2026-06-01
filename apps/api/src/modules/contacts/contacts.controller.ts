@@ -7,6 +7,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import type { ContactListsResponse } from '@getbeyond/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AuthGuard } from '../auth/auth.guard';
 import {
@@ -151,6 +152,30 @@ export class ContactsController {
       lastName: contact.lastName,
       title: contact.title,
       company: contact.company,
+    };
+  }
+
+  /**
+   * The org's contact lists, newest first — powers the campaign composer's
+   * source/wins pickers (so users select a list instead of pasting an id).
+   * CSV-imported and HubSpot-synced lists both appear, tagged by `source`.
+   */
+  @Get('lists')
+  async lists(
+    @CurrentUser() user: CurrentUserPayload,
+  ): Promise<ContactListsResponse> {
+    const rows = await this.prisma.contactList.findMany({
+      where: { orgId: user.orgId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return {
+      items: rows.map((l) => ({
+        id: l.id,
+        name: l.name,
+        contactCount: l.contactCount,
+        source: l.source,
+        createdAt: l.createdAt.toISOString(),
+      })),
     };
   }
 }
