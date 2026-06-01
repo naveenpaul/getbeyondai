@@ -1,6 +1,7 @@
 import type {
   CampaignDetailResponse,
   CampaignListResponse,
+  ContactListsResponse,
   CreateCampaignRequest,
   CreateCampaignResponse,
   ResearcherRunEnqueueResponse,
@@ -123,6 +124,20 @@ export async function listContacts(params?: {
   const res = await fetch(url.toString(), { credentials: 'include' });
   if (!res.ok) await readError(res);
   return res.json() as Promise<ContactListResponse>;
+}
+
+// ─── Contact lists (campaign source / wins pickers) ─────────────────────────
+//
+// Powers the campaign composer's source + wins pickers: the user selects an
+// imported list instead of pasting a raw id. CSV-imported and HubSpot-synced
+// lists both appear, distinguished by `source`.
+
+export async function listContactLists(): Promise<ContactListsResponse> {
+  const res = await fetch(`${env.apiUrl}/contacts/lists`, {
+    credentials: 'include',
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<ContactListsResponse>;
 }
 
 // ─── Drafts inbox ─────────────────────────────────────────────────────────

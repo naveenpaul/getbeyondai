@@ -3,9 +3,9 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
-import type { CreateCampaignRequest, SourcingConfig } from '@getbeyond/shared';
+import type { CreateCampaignRequest } from '@getbeyond/shared';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { SourcePicker } from '@/components/SourcePicker';
 import { ApiError, createCampaign } from '@/lib/api-client';
 import { useIdentity } from '@/lib/use-identity';
 
@@ -14,11 +14,12 @@ import { useIdentity } from '@/lib/use-identity';
  * on submit we POST a CreateCampaignRequest and route to the campaign's chat
  * workspace, where the SSE stream renders live.
  *
- * Sourcing is required by the contract (CreateCampaignRequest.sourcing). The
- * no-key default is `contact_list`, which needs the id of an imported list to
- * source the candidate pool from; we also let the user point the ICP at a
- * separate closed-won wins list. Both are real ids the user pastes — we never
- * fabricate them. Apollo sourcing is reserved (BYO key) and not offered yet.
+ * Chat-first: the goal is the only required field. A campaign can start with
+ * just a goal — it derives + shows the ICP and then prompts for a source.
+ * Sourcing is OPTIONAL (CreateCampaignRequest.sourcing): attach a contact list
+ * via the SourcePicker to find candidates, and optionally point the ICP at a
+ * separate closed-won wins list. Lists are picked, never pasted as raw ids.
+ * Apollo sourcing is reserved (BYO key) and not offered yet.
  *
  * Two visual modes:
  *  - `variant="hero"` — the prominent home-screen composer (large textarea).
@@ -37,14 +38,14 @@ export function CampaignComposer({
   const router = useRouter();
   const { status } = useIdentity();
   const [goal, setGoal] = useState('');
-  const [winsListId, setWinsListId] = useState('');
-  const [sourceListId, setSourceListId] = useState('');
+  const [winsListId, setWinsListId] = useState<string | null>(null);
+  const [sourceListId, setSourceListId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const identityReady = status === 'authenticated';
-  const canSubmit =
-    !submitting && goal.trim().length > 0 && sourceListId.trim().length > 0;
+  // Source is optional now — only the goal gates submission.
+  const canSubmit = !submitting && goal.trim().length > 0;
 
   async function onSubmit(e: React.FormEvent): Promise<void> {
     e.preventDefault();
@@ -52,14 +53,13 @@ export function CampaignComposer({
     setSubmitting(true);
     setError(null);
 
-    const sourcing: SourcingConfig = {
-      provider: 'contact_list',
-      listId: sourceListId.trim(),
-    };
     const payload: CreateCampaignRequest = {
       goal: goal.trim(),
-      sourcing,
-      winsListId: winsListId.trim() === '' ? null : winsListId.trim(),
+      sourcing:
+        sourceListId !== null
+          ? { provider: 'contact_list', listId: sourceListId }
+          : null,
+      winsListId,
     };
 
     try {
@@ -96,30 +96,34 @@ export function CampaignComposer({
             }
           }}
         />
-        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <Input
+        <div className="mt-3 grid grid-cols-1 gap-4 border-t pt-3 sm:grid-cols-2">
+          <SourcePicker
+            label="Source"
+            hint="(optional — candidate pool)"
+            noneLabel="None — derive ICP only"
             value={sourceListId}
-            onChange={(e) => setSourceListId(e.target.value)}
+            onChange={setSourceListId}
             disabled={submitting}
-            placeholder="Source list id (candidate pool)"
-            className="h-9 font-mono text-xs"
-            aria-label="Source contact list id"
           />
-          <Input
+          <SourcePicker
+            label="Wins list"
+            hint="(optional — derives ICP)"
+            noneLabel="None"
             value={winsListId}
-            onChange={(e) => setWinsListId(e.target.value)}
+            onChange={setWinsListId}
             disabled={submitting}
-            placeholder="Wins list id for the ICP (optional)"
-            className="h-9 font-mono text-xs"
-            aria-label="Wins contact list id"
           />
         </div>
-        <div className="mt-2 flex items-center justify-between">
+        <div className="mt-3 flex items-center justify-between gap-3">
           <p className="text-xs text-muted-foreground">
-            Sources a candidate pool, derives your ICP, then qualifies + ranks
-            each candidate with cited signals.
+            Derives your ICP; add a source to find candidates and rank them with
+            cited signals.
           </p>
-          <Button type="submit" size="sm" disabled={!canSubmit || !identityReady}>
+          <Button
+            type="submit"
+            size="sm"
+            disabled={!canSubmit || !identityReady}
+          >
             {submitting ? (
               <>
                 <Loader2 className="animate-spin" /> Starting…
