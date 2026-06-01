@@ -1,0 +1,22 @@
+getbeyond ai
+Copyright (c) 2026 getbeyond
+
+This product is licensed under the GNU Affero General Public License v3.0.
+See the LICENSE file for the full license text.
+
+================================================================================
+Third-party attributions
+================================================================================
+
+This product includes software developed by third parties. The notices below
+are reproduced to satisfy the attribution terms of their respective licenses.
+
+--------------------------------------------------------------------------------
+Crawl4AI  (optional content extractor — CONTENT_PROVIDER=crawl4ai)
+License: Apache License 2.0 (with attribution clause)
+https://github.com/unclecode/crawl4ai
+--------------------------------------------------------------------------------
+
+  This product includes software developed by UncleCode
+  (https://x.com/unclecode) as part of the Crawl4AI project
+  (https://github.com/unclecode/crawl4ai).

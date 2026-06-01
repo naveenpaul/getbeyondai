@@ -1,10 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildFetchUrlTool, type FetchUrlOutput } from './fetch-url';
 import type { AgentTool, ToolContext } from '../agent-tool';
+import type { ContentProvider, FetchedContent } from '../content/content-provider';
 
-// Test helper: cast the tool's execute() return to the typed output. The
-// AgentTool contract is `unknown` at the boundary; tests want the concrete
-// shape so the assertions are type-safe.
+/**
+ * fetch_url tool tests.
+ *
+ * This tool owns the trust-chain contract: it delegates fetch + extraction to
+ * a ContentProvider, then (a) applies the excerpt cap, (b) creates the Citation
+ * row, and (c) returns the fixed output shape. Extraction correctness lives in
+ * the provider specs; here we test the contract against a fake provider.
+ */
+
 async function runFetch(
   tool: AgentTool,
   args: { url: string },
@@ -13,11 +20,25 @@ async function runFetch(
   return tool.execute(args, ctx) as Promise<FetchUrlOutput>;
 }
 
-function htmlResponse(html: string, init: { status?: number } = {}): Response {
-  return new Response(html, {
-    status: init.status ?? 200,
-    headers: { 'content-type': 'text/html; charset=utf-8' },
-  });
+/** A ContentProvider that returns canned content (and records the urls it saw). */
+function fakeProvider(
+  content: Partial<FetchedContent> = {},
+): ContentProvider & { urls: string[] } {
+  const urls: string[] = [];
+  return {
+    name: 'fake',
+    urls,
+    async fetch(url: string): Promise<FetchedContent> {
+      urls.push(url);
+      return {
+        // `in` checks (not ??) so an explicitly-passed null is honored.
+        title: 'title' in content ? (content.title ?? null) : 'Default Title',
+        text: content.text ?? 'default extracted text',
+        status: content.status ?? 200,
+        contentType: content.contentType ?? 'text/html',
+      };
+    },
+  };
 }
 
 interface FakeCitation {
@@ -50,115 +71,94 @@ function makeCtx(): { ctx: ToolContext; citations: FakeCitation[] } {
 }
 
 describe('fetch_url', () => {
-  it('extracts title + readable excerpt + creates a Citation row', async () => {
-    const html = `
-      <html>
-        <head><title>Acme Inc — homepage</title><style>.x{color:red}</style></head>
-        <body>
-          <script>window.foo = 1</script>
-          <h1>Welcome to Acme</h1>
-          <p>We are a <strong>SaaS startup</strong> founded in 2022.</p>
-        </body>
-      </html>
-    `;
-    const httpFetch = vi.fn(async () => htmlResponse(html));
+  it('delegates to the provider and creates a Citation with the extracted content', async () => {
+    const provider = fakeProvider({
+      title: 'Acme Inc — homepage',
+      text: 'Welcome to Acme. We are a SaaS startup.',
+      status: 200,
+      contentType: 'text/html',
+    });
     const { ctx, citations } = makeCtx();
-    const tool = buildFetchUrlTool({ httpFetch });
+    const tool = buildFetchUrlTool({ contentProvider: provider });
 
     const result = await runFetch(tool, { url: 'https://acme.com' }, ctx);
+
+    expect(provider.urls).toEqual(['https://acme.com']);
     expect(result).toMatchObject({
       citationId: 'cit-1',
       url: 'https://acme.com',
       title: 'Acme Inc — homepage',
+      excerpt: 'Welcome to Acme. We are a SaaS startup.',
       status: 200,
+      contentType: 'text/html',
     });
-    expect(result.excerpt).toContain('Welcome to Acme');
-    expect(result.excerpt).toContain('SaaS startup');
-    // <script> + <style> stripped.
-    expect(result.excerpt).not.toContain('window.foo');
-    expect(result.excerpt).not.toContain('color:red');
 
     expect(citations).toHaveLength(1);
-    expect(citations[0]?.runId).toBe('run-1');
-    expect(citations[0]?.url).toBe('https://acme.com');
-    expect(citations[0]?.title).toBe('Acme Inc — homepage');
+    expect(citations[0]).toMatchObject({
+      runId: 'run-1',
+      url: 'https://acme.com',
+      title: 'Acme Inc — homepage',
+      excerpt: 'Welcome to Acme. We are a SaaS startup.',
+    });
   });
 
-  it('handles missing <title> (returns null + still creates Citation)', async () => {
-    const html = '<html><body><p>No title here</p></body></html>';
+  it('caps the excerpt to maxTextLength (Citation + output both capped)', async () => {
+    const provider = fakeProvider({ text: 'word '.repeat(10_000) });
     const { ctx, citations } = makeCtx();
-    const tool = buildFetchUrlTool({ httpFetch: vi.fn(async () => htmlResponse(html)) });
+    const tool = buildFetchUrlTool({
+      contentProvider: provider,
+      maxTextLength: 100,
+    });
+
+    const result = await runFetch(tool, { url: 'https://x.example' }, ctx);
+    expect(result.excerpt.length).toBeLessThanOrEqual(100);
+    expect(citations[0]?.excerpt.length).toBeLessThanOrEqual(100);
+  });
+
+  it('persists a null title (still creating the Citation)', async () => {
+    const provider = fakeProvider({ title: null });
+    const { ctx, citations } = makeCtx();
+    const tool = buildFetchUrlTool({ contentProvider: provider });
 
     const result = await runFetch(tool, { url: 'https://no-title.example' }, ctx);
     expect(result.title).toBeNull();
     expect(citations[0]?.title).toBeNull();
   });
 
-  it('truncates the excerpt to maxTextLength characters', async () => {
-    const longBody = 'word '.repeat(10_000);
-    const html = `<html><body>${longBody}</body></html>`;
-    const { ctx } = makeCtx();
-    const tool = buildFetchUrlTool({
-      httpFetch: vi.fn(async () => htmlResponse(html)),
-      maxTextLength: 100,
-    });
-    const result = await runFetch(tool, { url: 'https://x.example' }, ctx);
-    expect(result.excerpt.length).toBeLessThanOrEqual(100);
-  });
-
-  it('decodes HTML entities in title + excerpt', async () => {
-    const html =
-      '<html><head><title>Acme &amp; Co.</title></head><body><p>2 &lt; 3 &amp; 4 &gt; 1</p></body></html>';
-    const { ctx } = makeCtx();
-    const tool = buildFetchUrlTool({ httpFetch: vi.fn(async () => htmlResponse(html)) });
-    const result = await runFetch(tool, { url: 'https://e.example' }, ctx);
-    expect(result.title).toBe('Acme & Co.');
-    expect(result.excerpt).toContain('2 < 3 & 4 > 1');
-  });
-
-  it('rejects non-URL input at the Zod boundary', async () => {
-    const tool = buildFetchUrlTool({ httpFetch: vi.fn() });
-    const { ctx } = makeCtx();
-    await expect(
-      tool.execute({ url: 'not-a-url' }, ctx),
-    ).rejects.toThrow();
-  });
-
-  it('records the actual HTTP status returned (including 4xx)', async () => {
+  it('records the provider-reported status, including 4xx', async () => {
+    const provider = fakeProvider({ status: 404, text: 'Not Found' });
     const { ctx, citations } = makeCtx();
-    const httpFetch = vi.fn(async () => htmlResponse('<title>Not Found</title>', { status: 404 }));
-    const tool = buildFetchUrlTool({ httpFetch });
-    const result = await runFetch(
-      tool,
-      { url: 'https://missing.example/page' },
-      ctx,
-    );
+    const tool = buildFetchUrlTool({ contentProvider: provider });
+
+    const result = await runFetch(tool, { url: 'https://missing.example' }, ctx);
     expect(result.status).toBe(404);
     // Even on 404 we record the Citation so the audit log shows what was attempted.
     expect(citations).toHaveLength(1);
   });
 
-  it('uses a User-Agent identifying getbeyond', async () => {
-    const httpFetch = vi.fn(
-      async (_url: string | URL | Request, _init?: RequestInit) =>
-        htmlResponse('<title>x</title>'),
-    );
-    const { ctx } = makeCtx();
-    const tool = buildFetchUrlTool({ httpFetch });
-    await tool.execute({ url: 'https://x.example' }, ctx);
-    const call = httpFetch.mock.calls[0];
-    expect(call?.[1]?.headers).toMatchObject({
-      'User-Agent': expect.stringContaining('getbeyond'),
-    });
+  it('rejects non-URL input at the Zod boundary (no fetch, no Citation)', async () => {
+    const provider = fakeProvider();
+    const { ctx, citations } = makeCtx();
+    const tool = buildFetchUrlTool({ contentProvider: provider });
+
+    await expect(tool.execute({ url: 'not-a-url' }, ctx)).rejects.toThrow();
+    expect(provider.urls).toHaveLength(0);
+    expect(citations).toHaveLength(0);
   });
 
-  it('caps the raw body to maxBytes before extracting', async () => {
-    const massive = '<html><body>' + 'a'.repeat(100_000) + '</body></html>';
-    const httpFetch = vi.fn(async () => htmlResponse(massive));
-    const { ctx } = makeCtx();
-    const tool = buildFetchUrlTool({ httpFetch, maxBytes: 1000, maxTextLength: 8000 });
-    const result = await runFetch(tool, { url: 'https://big.example' }, ctx);
-    // Extracted text is bounded by the truncated input, so much shorter than 100k.
-    expect(result.excerpt.length).toBeLessThan(2000);
+  it('propagates a provider failure (no Citation written)', async () => {
+    const failing: ContentProvider = {
+      name: 'fake',
+      fetch: vi.fn(async () => {
+        throw new Error('extraction failed');
+      }),
+    };
+    const { ctx, citations } = makeCtx();
+    const tool = buildFetchUrlTool({ contentProvider: failing });
+
+    await expect(
+      tool.execute({ url: 'https://boom.example' }, ctx),
+    ).rejects.toThrow('extraction failed');
+    expect(citations).toHaveLength(0);
   });
 });
