@@ -37,6 +37,12 @@
       "require": "./dist/campaign-contracts.js",
       "import": "./dist/campaign-contracts.js",
       "default": "./dist/campaign-contracts.js"
+    },
+    "./llm-settings-contracts": {
+      "types": "./dist/llm-settings-contracts.d.ts",
+      "require": "./dist/llm-settings-contracts.js",
+      "import": "./dist/llm-settings-contracts.js",
+      "default": "./dist/llm-settings-contracts.js"
     }
   },
   "scripts": {
