@@ -2,8 +2,7 @@
 
 import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import Link from 'next/link';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -73,14 +72,6 @@ function SdrDrafterForm(): React.JSX.Element {
 
   return (
     <main className="container space-y-6 py-12">
-      <Link
-        href="/research/new"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-      >
-        <ArrowLeft className="h-3.5 w-3.5" />
-        Back
-      </Link>
-
       <Card className="mx-auto max-w-2xl">
         <CardHeader>
           <CardTitle>Draft an outreach email</CardTitle>

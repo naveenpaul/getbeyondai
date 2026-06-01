@@ -5,8 +5,8 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   AlertCircle,
-  ArrowLeft,
   CheckCircle2,
+  ChevronRight,
   FileUp,
   Loader2,
   Upload,
@@ -170,13 +170,16 @@ export default function ImportContactsPage(): React.JSX.Element {
 
   return (
     <main className="container space-y-6 py-12">
-      <Link
-        href="/contacts"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+      <nav
+        aria-label="Breadcrumb"
+        className="flex items-center gap-1.5 text-sm text-muted-foreground"
       >
-        <ArrowLeft className="h-3.5 w-3.5" />
-        Contacts
-      </Link>
+        <Link href="/contacts" className="hover:text-foreground">
+          Contacts
+        </Link>
+        <ChevronRight className="h-3.5 w-3.5" />
+        <span className="text-foreground">Import</span>
+      </nav>
 
       <Card className="mx-auto max-w-3xl">
         <CardHeader>

@@ -67,7 +67,7 @@ function LoginForm(): React.JSX.Element {
   const callbackURL =
     rawNext && rawNext.startsWith('/') && !rawNext.startsWith('//')
       ? rawNext
-      : '/research/new';
+      : '/';
 
   const session = useSession();
   const [mode, setMode] = useState<Mode>('sign-in');
