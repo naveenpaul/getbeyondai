@@ -47,6 +47,20 @@ export const PROVIDER_DEFAULT_MODELS: Record<
 /** Self-host escape hatch: process-level env-key fallback toggle. */
 const ENV_FALLBACK_FLAG = 'LLM_ALLOW_ENV_FALLBACK';
 
+/**
+ * Teammates that can be routed in settings. These slugs MUST match the worker
+ * resolution keys (researcher.worker `RESEARCHER_TEAMMATE`, sdr-drafter.worker
+ * `SDR_DRAFTER_TEAMMATE`, and `CAMPAIGN_TEAMMATE`), or a routing saved here
+ * won't be found by the run that resolves the provider. The status endpoint
+ * returns ALL of these (with current-or-default routing) so a fresh org sees
+ * teammates to route — otherwise there'd be nothing to point at a new key.
+ */
+const KNOWN_TEAMMATES = [
+  'researcher',
+  'sdr-drafter',
+  'campaign-orchestrator',
+] as const;
+
 /** shared LlmProviderName → Prisma Provider enum. Total over the union. */
 export function toPrismaProvider(name: LlmProviderName): Provider {
   return name === 'anthropic' ? Provider.anthropic : Provider.openai;
@@ -101,12 +115,29 @@ export class LlmSettingsService {
       configured: configuredProviders.has(toPrismaProvider(name)),
     }));
 
-    const teammates: TeammateRoutingConfig[] = configRows.map((row) => ({
-      teammate: row.teammate,
-      provider: toProviderName(row.provider),
-      modelPrimary: row.modelPrimary,
-      modelFast: row.modelFast,
-    }));
+    // Return ALL known teammates with current-or-default routing, so the UI can
+    // route any of them to a provider even before a config row exists.
+    const configByTeammate = new Map(
+      configRows.map((row) => [row.teammate, row]),
+    );
+    const teammates: TeammateRoutingConfig[] = KNOWN_TEAMMATES.map((slug) => {
+      const row = configByTeammate.get(slug);
+      if (row) {
+        return {
+          teammate: slug,
+          provider: toProviderName(row.provider),
+          modelPrimary: row.modelPrimary,
+          modelFast: row.modelFast,
+        };
+      }
+      const defaults = PROVIDER_DEFAULT_MODELS.anthropic;
+      return {
+        teammate: slug,
+        provider: 'anthropic',
+        modelPrimary: defaults.modelPrimary,
+        modelFast: defaults.modelFast,
+      };
+    });
 
     return {
       providers,

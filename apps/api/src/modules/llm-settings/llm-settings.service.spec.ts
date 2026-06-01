@@ -123,7 +123,7 @@ describe('LlmSettingsService.getSettings', () => {
     expect(serialized).not.toContain('key');
   });
 
-  it('maps OrgTeammateConfig rows to TeammateRoutingConfig', async () => {
+  it('returns all known teammates, merging configured rows over anthropic defaults', async () => {
     const { service, mocks } = makeService({
       configFindMany: vi.fn(async () => [
         {
@@ -137,12 +137,26 @@ describe('LlmSettingsService.getSettings', () => {
 
     const result = await service.getSettings('org-1');
 
+    // researcher reflects its row; the other known teammates default to
+    // anthropic so the UI can still route them to a provider.
     expect(result.teammates).toEqual([
       {
         teammate: 'researcher',
         provider: 'openai',
         modelPrimary: 'gpt-4.1',
         modelFast: 'gpt-4.1-mini',
+      },
+      {
+        teammate: 'sdr-drafter',
+        provider: 'anthropic',
+        modelPrimary: 'claude-sonnet-4-6',
+        modelFast: 'claude-haiku-4-5-20251001',
+      },
+      {
+        teammate: 'campaign-orchestrator',
+        provider: 'anthropic',
+        modelPrimary: 'claude-sonnet-4-6',
+        modelFast: 'claude-haiku-4-5-20251001',
       },
     ]);
     expect(mocks.configFindMany).toHaveBeenCalledWith({
