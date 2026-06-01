@@ -4,6 +4,8 @@ import { AuthModule } from '../auth/auth.module';
 import { QueueModule } from '../queue/queue.module';
 import { LLM_PROVIDER } from './runtime/llm-provider';
 import { createAnthropicProvider } from './runtime/providers/anthropic.provider';
+import { LlmCredentialManager } from './runtime/llm-credential-manager';
+import { LlmResolver } from './runtime/llm-resolver';
 import {
   InMemoryRunEventBus,
   RUN_EVENT_BUS,
@@ -33,6 +35,11 @@ import { SdrDrafterWorker } from './sdr-drafter/sdr-drafter.worker';
       useFactory: () =>
         createAnthropicProvider(process.env.ANTHROPIC_API_KEY ?? ''),
     },
+    // P5: per-run, per-org provider resolution (org BYO key → env → block).
+    // LlmCredentialManager unseals the stored key; LlmResolver builds the
+    // provider. Workers migrate off the LLM_PROVIDER singleton onto LlmResolver.
+    LlmCredentialManager,
+    LlmResolver,
     {
       // useFactory, not useClass: the constructor takes an options bag
       // (`opts: { bufferCleanupMs? } = {}`), which NestJS would try to
@@ -44,6 +51,6 @@ import { SdrDrafterWorker } from './sdr-drafter/sdr-drafter.worker';
     ResearcherWorker,
     SdrDrafterWorker,
   ],
-  exports: [LLM_PROVIDER, RUN_EVENT_BUS],
+  exports: [LLM_PROVIDER, RUN_EVENT_BUS, LlmResolver],
 })
 export class TeammatesModule {}
