@@ -11,6 +11,7 @@ import type {
   SaveLlmCredentialRequest,
   SaveLlmCredentialResponse,
   SaveLlmRoutingRequest,
+  TestLlmCredentialResponse,
   SdrDrafterRunEnqueueResponse,
   SdrDrafterRunRequest,
   SdrDrafterRunStatusResponse,
@@ -357,6 +358,21 @@ export async function createCampaign(
   return res.json() as Promise<CreateCampaignResponse>;
 }
 
+/**
+ * Re-run a campaign: clones its config into a new campaign and enqueues a fresh
+ * run. Returns the NEW campaign id, which the caller navigates to.
+ */
+export async function rerunCampaign(
+  id: string,
+): Promise<CreateCampaignResponse> {
+  const res = await fetch(
+    `${env.apiUrl}/campaigns/${encodeURIComponent(id)}/rerun`,
+    { method: 'POST', credentials: 'include' },
+  );
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<CreateCampaignResponse>;
+}
+
 export async function listCampaigns(): Promise<CampaignListResponse> {
   const res = await fetch(`${env.apiUrl}/campaigns`, {
     credentials: 'include',
@@ -522,6 +538,21 @@ export async function saveLlmCredential(
   });
   if (!res.ok) await readError(res);
   return res.json() as Promise<SaveLlmCredentialResponse>;
+}
+
+/**
+ * Live-verify the stored key for a provider. An invalid key returns a normal
+ * `{ ok: false, error }` verdict (HTTP 200) — only a bad provider name throws.
+ */
+export async function testLlmCredential(
+  provider: string,
+): Promise<TestLlmCredentialResponse> {
+  const res = await fetch(
+    `${env.apiUrl}/settings/llm/credentials/${encodeURIComponent(provider)}/test`,
+    { method: 'POST', credentials: 'include' },
+  );
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<TestLlmCredentialResponse>;
 }
 
 export async function saveLlmRouting(

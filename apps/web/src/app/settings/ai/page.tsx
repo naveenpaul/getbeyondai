@@ -1,12 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Check, Info, Loader2 } from 'lucide-react';
+import { Check, Info, Loader2, X } from 'lucide-react';
 import type {
   LlmProviderName,
   LlmProviderStatus,
   LlmSettingsResponse,
   TeammateRoutingConfig,
+  TestLlmCredentialResponse,
 } from '@getbeyond/shared';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -23,6 +24,7 @@ import {
   getLlmSettings,
   saveLlmCredential,
   saveLlmRouting,
+  testLlmCredential,
 } from '@/lib/api-client';
 
 /**
@@ -171,6 +173,7 @@ export default function AiSettingsPage(): React.JSX.Element {
                   <TeammateRoutingRow
                     key={config.teammate}
                     config={config}
+                    providerDefaults={settings.providerDefaults}
                     onSaved={applyRouting}
                   />
                 ))}
@@ -193,6 +196,12 @@ function ProviderKeyCard({
   const [apiKey, setApiKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  // Result of the last live verify this session. Null until the user tests —
+  // we don't auto-verify on load (a provider call per card per page load).
+  const [testResult, setTestResult] = useState<TestLlmCredentialResponse | null>(
+    null,
+  );
 
   async function onSubmit(e: React.FormEvent): Promise<void> {
     e.preventDefault();
@@ -203,11 +212,26 @@ function ProviderKeyCard({
     try {
       await saveLlmCredential({ provider: status.provider, apiKey: trimmed });
       setApiKey('');
+      // The save path already verified the key (a bad key is rejected with a
+      // 400), so a successful save means it authenticated.
+      setTestResult({ provider: status.provider, ok: true, error: null });
       onSaved();
     } catch (err) {
       setError(formatError(err));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function onTest(): Promise<void> {
+    setTesting(true);
+    setError(null);
+    try {
+      setTestResult(await testLlmCredential(status.provider));
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      setTesting(false);
     }
   }
 
@@ -220,18 +244,11 @@ function ProviderKeyCard({
           <CardTitle className="text-base">
             {PROVIDER_LABELS[status.provider]}
           </CardTitle>
-          {status.configured ? (
-            <Badge variant="success">
-              <Check className="mr-1 h-3 w-3" />
-              Connected
-            </Badge>
-          ) : (
-            <Badge variant="outline">Not configured</Badge>
-          )}
+          <KeyStatusBadge configured={status.configured} test={testResult} />
         </div>
         <CardDescription>
           {status.configured
-            ? 'A key is configured. Save a new key to replace it.'
+            ? 'A key is configured. Test it below, or save a new key to replace it.'
             : 'Add a key to enable this provider.'}
         </CardDescription>
       </CardHeader>
@@ -260,7 +277,31 @@ function ProviderKeyCard({
               <>Save key</>
             )}
           </Button>
+          {status.configured ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void onTest()}
+              disabled={testing || submitting}
+            >
+              {testing ? (
+                <>
+                  <Loader2 className="animate-spin" /> Testing…
+                </>
+              ) : (
+                <>Test key</>
+              )}
+            </Button>
+          ) : null}
         </form>
+        {testResult && !testResult.ok && testResult.error ? (
+          <p className="mt-2 text-sm text-destructive">{testResult.error}</p>
+        ) : null}
+        {testResult?.ok ? (
+          <p className="mt-2 text-sm text-emerald-600">
+            Key verified — it authenticates with {PROVIDER_LABELS[status.provider]}.
+          </p>
+        ) : null}
         {error ? (
           <p className="mt-2 text-sm text-destructive">{error}</p>
         ) : null}
@@ -269,11 +310,45 @@ function ProviderKeyCard({
   );
 }
 
+/**
+ * Honest key status. The plain "a key is stored" state is deliberately NOT green
+ * — green is reserved for a key that actually authenticated (a passed test or a
+ * just-saved key, which the save path verifies). This is the fix for a stored-
+ * but-invalid key masquerading as "Connected".
+ */
+function KeyStatusBadge({
+  configured,
+  test,
+}: {
+  configured: boolean;
+  test: TestLlmCredentialResponse | null;
+}): React.JSX.Element {
+  if (test) {
+    return test.ok ? (
+      <Badge variant="success">
+        <Check className="mr-1 h-3 w-3" />
+        Verified
+      </Badge>
+    ) : (
+      <Badge variant="destructive">
+        <X className="mr-1 h-3 w-3" />
+        Invalid key
+      </Badge>
+    );
+  }
+  if (configured) {
+    return <Badge variant="secondary">Key stored — untested</Badge>;
+  }
+  return <Badge variant="outline">Not configured</Badge>;
+}
+
 function TeammateRoutingRow({
   config,
+  providerDefaults,
   onSaved,
 }: {
   config: TeammateRoutingConfig;
+  providerDefaults: LlmSettingsResponse['providerDefaults'];
   onSaved: (next: TeammateRoutingConfig) => void;
 }): React.JSX.Element {
   const [provider, setProvider] = useState<LlmProviderName>(config.provider);
@@ -281,6 +356,16 @@ function TeammateRoutingRow({
   const [modelFast, setModelFast] = useState(config.modelFast);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Switching provider resets the model fields to the new provider's defaults.
+  // Model ids are provider-specific (an OpenAI route can't use a Claude id), so
+  // carrying the old provider's ids over would persist an invalid combo. The
+  // user can still type an override before saving.
+  function onProviderChange(next: LlmProviderName): void {
+    setProvider(next);
+    setModelPrimary(providerDefaults[next].modelPrimary);
+    setModelFast(providerDefaults[next].modelFast);
+  }
 
   // Dirty when any field diverges from the persisted config — gates the Save
   // button so unchanged rows can't fire a no-op PUT.
@@ -332,7 +417,7 @@ function TeammateRoutingRow({
             id={`${baseId}-provider`}
             className="h-10 rounded-md border border-input bg-background px-3 text-sm"
             value={provider}
-            onChange={(e) => setProvider(e.target.value as LlmProviderName)}
+            onChange={(e) => onProviderChange(e.target.value as LlmProviderName)}
             disabled={submitting}
           >
             {PROVIDER_OPTIONS.map((p) => (

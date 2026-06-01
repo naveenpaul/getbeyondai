@@ -489,9 +489,16 @@ model Campaign {
   // Soft reference (like ContactList.source) to the ContactList of closed-won
   // accounts the ICP is derived from. Nullable until a wins list is attached.
   winsListId String?
-  createdBy  String // userId
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  // The run configuration, persisted so a campaign can be re-run faithfully
+  // (and so detail can surface what it used). Previously these lived ONLY in
+  // the pg-boss job payload — business state outside the DB, which broke re-run.
+  //   sourcing    — the SourcingConfig (candidate pool). null = no source.
+  //   budgetCents — per-campaign cost cap. null = orchestrator default.
+  sourcing    Json? // SourcingConfig | null
+  budgetCents Int?
+  createdBy   String // userId
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   org        Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
   candidates CampaignCandidate[]

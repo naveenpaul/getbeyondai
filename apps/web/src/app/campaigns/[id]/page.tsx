@@ -2,15 +2,17 @@
 
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { ArrowLeft, Loader2, RotateCw } from 'lucide-react';
 import type {
   CampaignDetailResponse,
   CampaignStatus,
 } from '@getbeyond/shared';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { CampaignTranscript } from '@/components/CampaignTranscript';
 import { ConnectedToolsSidebar } from '@/components/ConnectedToolsSidebar';
-import { ApiError, getCampaign } from '@/lib/api-client';
+import { ApiError, getCampaign, rerunCampaign } from '@/lib/api-client';
 import { useCampaignStream } from '@/lib/use-campaign-stream';
 
 /**
@@ -91,6 +93,15 @@ export default function CampaignWorkspacePage({
             </h1>
             {campaign ? <StatusBadge status={campaign.status} /> : null}
             <span className="font-mono text-xs text-muted-foreground">{id}</span>
+            {/* Re-run is offered once a campaign has settled (failed or
+                completed); it clones the config into a fresh run and navigates
+                to the new campaign. Hidden while draft/running to avoid
+                spawning a duplicate of an in-flight run. */}
+            {campaign &&
+            (campaign.status === 'failed' ||
+              campaign.status === 'completed') ? (
+              <RerunButton campaignId={id} className="ml-auto" />
+            ) : null}
           </div>
           {campaign?.goal ? (
             <p className="text-sm text-muted-foreground">{campaign.goal}</p>
@@ -152,6 +163,68 @@ export default function CampaignWorkspacePage({
           <ConnectedToolsSidebar sourcing={null} />
         </div>
       </aside>
+    </div>
+  );
+}
+
+/**
+ * Re-runs the campaign: clones its persisted config into a new campaign and
+ * navigates to it. Disabled while in flight so a double-click can't spawn two
+ * runs. Errors surface inline beneath the header rather than as a toast (no
+ * toast system here yet).
+ */
+function RerunButton({
+  campaignId,
+  className,
+}: {
+  campaignId: string;
+  className?: string;
+}): React.JSX.Element {
+  const router = useRouter();
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function onRerun(): Promise<void> {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const { campaignId: nextId } = await rerunCampaign(campaignId);
+      router.push(`/campaigns/${nextId}`);
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? `${err.status} — ${err.body.slice(0, 200)}`
+          : err instanceof Error
+            ? err.message
+            : 'Re-run failed',
+      );
+      setSubmitting(false);
+    }
+    // On success we navigate away, so we intentionally leave `submitting` true
+    // (the button unmounts) rather than resetting it.
+  }
+
+  return (
+    <div className={className}>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => void onRerun()}
+        disabled={submitting}
+      >
+        {submitting ? (
+          <>
+            <Loader2 className="animate-spin" /> Re-running…
+          </>
+        ) : (
+          <>
+            <RotateCw className="h-3.5 w-3.5" /> Re-run
+          </>
+        )}
+      </Button>
+      {error ? (
+        <p className="mt-1 text-right text-xs text-destructive">{error}</p>
+      ) : null}
     </div>
   );
 }

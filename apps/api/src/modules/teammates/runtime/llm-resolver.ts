@@ -4,6 +4,7 @@ import { PrismaService } from '../../../common/prisma/prisma.service';
 import { LlmCredentialManager } from './llm-credential-manager';
 import type { LlmProvider } from './llm-provider';
 import { LlmProviderError, type ProviderName } from './llm-types';
+import { isModelForProvider, modelMismatchMessage } from './model-namespace';
 import { createProvider } from './providers/registry';
 import {
   resolveLlm,
@@ -54,6 +55,24 @@ export class LlmResolver {
       orgId,
       teammate,
     );
+
+    // Namespace fail-fast: catch a provider↔model mismatch (e.g. a pre-existing
+    // OpenAI route still pointing at a claude-* model) BEFORE any spend, with a
+    // clear message — instead of an opaque provider 404 mid-run that the
+    // orchestrator can only surface as a bare "failed". The write chokepoint
+    // (saveRouting) blocks new bad rows; this guards rows saved before the
+    // validation existed and any non-UI write path (env fallback, extension).
+    for (const [field, model] of [
+      ['modelPrimary', resolved.modelPrimary],
+      ['modelFast', resolved.modelFast],
+    ] as const) {
+      if (!isModelForProvider(resolved.providerName, model)) {
+        throw new LlmProviderError(
+          modelMismatchMessage(resolved.providerName, model, field),
+          resolved.providerName,
+        );
+      }
+    }
 
     const provider = createProvider(resolved.providerName, resolved.apiKey);
     if (!provider.capabilities.toolUse) {

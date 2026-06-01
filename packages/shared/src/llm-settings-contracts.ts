@@ -24,11 +24,24 @@ export interface TeammateRoutingConfig {
   modelFast: string;
 }
 
+/** The primary + fast model ids a provider falls back to when none are set. */
+export interface ProviderModelDefaults {
+  modelPrimary: string;
+  modelFast: string;
+}
+
 // ─── GET /settings/llm ──────────────────────────────────────────────
 
 export interface LlmSettingsResponse {
   providers: LlmProviderStatus[];
   teammates: TeammateRoutingConfig[];
+  /**
+   * Per-provider default model ids (the server's PROVIDER_DEFAULT_MODELS).
+   * Exposed so the client can repopulate the model fields when a teammate's
+   * provider changes — switching to OpenAI must not leave Anthropic model ids
+   * in place (and vice versa). The server remains the source of truth.
+   */
+  providerDefaults: Record<LlmProviderName, ProviderModelDefaults>;
   /** True when the self-host env fallback is active (LLM_ALLOW_ENV_FALLBACK). */
   envFallbackEnabled: boolean;
 }
@@ -45,6 +58,20 @@ export interface SaveLlmCredentialRequest {
 export interface SaveLlmCredentialResponse {
   provider: LlmProviderName;
   configured: true;
+}
+
+// ─── POST /settings/llm/credentials/:provider/test ──────────────────
+//
+// Live auth-check of the stored key for a provider: makes a cheap probe call
+// and reports whether the key actually authenticates. Lets the UI show a real
+// "valid / invalid" result instead of just "a key is stored". Never echoes the
+// key — only the verdict + a reason on failure.
+
+export interface TestLlmCredentialResponse {
+  provider: LlmProviderName;
+  ok: boolean;
+  /** Null when ok; a human-readable reason when the key did not verify. */
+  error: string | null;
 }
 
 // ─── PUT /settings/llm/routing ──────────────────────────────────────

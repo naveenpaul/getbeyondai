@@ -82,4 +82,22 @@ describe('LlmResolver', () => {
       /no llm credentials/i,
     );
   });
+
+  // Defense-in-depth for the provider↔model root fix: a pre-existing bad row
+  // (saved before the write-time guard) fails fast at resolve, BEFORE any spend,
+  // with a clear message — instead of an opaque provider 404 mid-run.
+  it('fails fast on a provider↔model mismatch (openai route + claude-* model)', async () => {
+    const r = resolver({
+      routing: {
+        provider: Provider.openai,
+        modelPrimary: 'claude-sonnet-4-6',
+        modelFast: 'claude-haiku-4-5-20251001',
+      },
+      load: async (_org, p) => (p === Provider.openai ? 'sk-openai' : null),
+    });
+
+    await expect(r.resolve('org-1', 'campaign-orchestrator')).rejects.toThrow(
+      /is not a openai model/i,
+    );
+  });
 });

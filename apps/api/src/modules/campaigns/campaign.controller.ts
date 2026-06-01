@@ -40,6 +40,7 @@ import { buildCampaignStreamObservable } from './campaign-stream';
  * an async run + stream live progress via the RunEventBus.
  *
  *   POST /campaigns            → 201 CreateCampaignResponse (creates + enqueues)
+ *   POST /campaigns/:id/rerun  → 201 CreateCampaignResponse (clones + enqueues)
  *   GET  /campaigns            → 200 CampaignListResponse
  *   GET  /campaigns/:id        → 200 CampaignDetailResponse
  *   GET  /campaigns/:id/stream → text/event-stream of CampaignEvent
@@ -76,6 +77,21 @@ export class CampaignController {
       );
     }
     return this.campaigns.create(user.orgId, user.userId, parsed.data);
+  }
+
+  /**
+   * Re-run an existing campaign: clones its persisted config into a new campaign
+   * and enqueues a fresh run. Tenant + existence are enforced in the service
+   * (a campaign from another org is rejected). Returns the new campaign so the
+   * client can navigate to and stream it.
+   */
+  @Post(':id/rerun')
+  @HttpCode(201)
+  async rerun(
+    @Param('id') id: string,
+    @CurrentUser() user: CurrentUserPayload,
+  ): Promise<CreateCampaignResponse> {
+    return this.campaigns.rerun(user.orgId, id, user.userId);
   }
 
   @Get()

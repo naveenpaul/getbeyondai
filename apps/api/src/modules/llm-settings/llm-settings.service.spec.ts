@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BadRequestException } from '@nestjs/common';
 import { Provider } from '@prisma/client';
 import type { PrismaService } from '../../common/prisma/prisma.service';
 import type { LlmCredentialManager } from '../teammates/runtime/llm-credential-manager';
+import { LlmAuthError } from '../teammates/runtime/llm-types';
+import type { KeyVerifier } from './key-verifier';
 import {
   LlmSettingsService,
   PROVIDER_DEFAULT_MODELS,
@@ -27,6 +30,8 @@ interface ServiceMocks {
   configFindMany: ReturnType<typeof vi.fn>;
   configUpsert: ReturnType<typeof vi.fn>;
   save: ReturnType<typeof vi.fn>;
+  load: ReturnType<typeof vi.fn>;
+  verify: ReturnType<typeof vi.fn>;
 }
 
 function makeService(overrides?: Partial<ServiceMocks>): {
@@ -38,6 +43,9 @@ function makeService(overrides?: Partial<ServiceMocks>): {
     configFindMany: overrides?.configFindMany ?? vi.fn(async () => []),
     configUpsert: overrides?.configUpsert ?? vi.fn(),
     save: overrides?.save ?? vi.fn(async () => undefined),
+    load: overrides?.load ?? vi.fn(async () => null),
+    // Default: key verifies cleanly. Tests override to throw LlmAuthError etc.
+    verify: overrides?.verify ?? vi.fn(async () => undefined),
   };
 
   const prisma = {
@@ -50,9 +58,15 @@ function makeService(overrides?: Partial<ServiceMocks>): {
 
   const credentials = {
     save: mocks.save,
+    load: mocks.load,
   } as unknown as LlmCredentialManager;
 
-  return { service: new LlmSettingsService(prisma, credentials), mocks };
+  const verifier = { verify: mocks.verify } as unknown as KeyVerifier;
+
+  return {
+    service: new LlmSettingsService(prisma, credentials, verifier),
+    mocks,
+  };
 }
 
 describe('toPrismaProvider / toProviderName', () => {
@@ -165,6 +179,24 @@ describe('LlmSettingsService.getSettings', () => {
     });
   });
 
+  it('exposes the per-provider model defaults so the client can repopulate on provider change', async () => {
+    const { service } = makeService();
+
+    const result = await service.getSettings('org-1');
+
+    // Source of truth is the server constant — the client reads this rather
+    // than hardcoding model ids of its own.
+    expect(result.providerDefaults).toEqual(PROVIDER_DEFAULT_MODELS);
+    expect(result.providerDefaults.openai).toEqual({
+      modelPrimary: 'gpt-4.1',
+      modelFast: 'gpt-4.1-mini',
+    });
+    expect(result.providerDefaults.anthropic).toEqual({
+      modelPrimary: 'claude-sonnet-4-6',
+      modelFast: 'claude-haiku-4-5-20251001',
+    });
+  });
+
   it('returns envFallbackEnabled=true only when the flag is exactly "true"', async () => {
     process.env[ENV_FLAG] = 'true';
     const enabled = await makeService().service.getSettings('org-1');
@@ -195,6 +227,99 @@ describe('LlmSettingsService.saveCredential', () => {
     const { service } = makeService();
     const result = await service.saveCredential('org-1', 'anthropic', 'sk-leak');
     expect(JSON.stringify(result)).not.toContain('sk-leak');
+  });
+
+  it('verifies the key before persisting (so a stored key authenticated once)', async () => {
+    const verify = vi.fn(async () => undefined);
+    const save = vi.fn(async () => undefined);
+    const { service } = makeService({ verify, save });
+
+    await service.saveCredential('org-1', 'openai', 'sk-good');
+
+    expect(verify).toHaveBeenCalledWith('openai', 'sk-good');
+    expect(save).toHaveBeenCalled();
+  });
+
+  it('rejects a key the provider refuses (auth error) and does NOT store it', async () => {
+    const verify = vi.fn(async () => {
+      throw new LlmAuthError('openai');
+    });
+    const save = vi.fn(async () => undefined);
+    const { service } = makeService({ verify, save });
+
+    await expect(
+      service.saveCredential('org-1', 'openai', 'sk-bad'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('still stores the key on a transient (non-auth) verify failure (no outage lockout)', async () => {
+    const verify = vi.fn(async () => {
+      throw new Error('network unreachable');
+    });
+    const save = vi.fn(async () => undefined);
+    const { service } = makeService({ verify, save });
+
+    const result = await service.saveCredential('org-1', 'openai', 'sk-ok');
+
+    expect(save).toHaveBeenCalled();
+    expect(result).toEqual({ provider: 'openai', configured: true });
+  });
+});
+
+describe('LlmSettingsService.testCredential', () => {
+  it('returns ok:true when the stored key verifies', async () => {
+    const load = vi.fn(async () => 'sk-stored');
+    const verify = vi.fn(async () => undefined);
+    const { service } = makeService({ load, verify });
+
+    const result = await service.testCredential('org-1', 'openai');
+
+    expect(load).toHaveBeenCalledWith('org-1', Provider.openai);
+    expect(verify).toHaveBeenCalledWith('openai', 'sk-stored');
+    expect(result).toEqual({ provider: 'openai', ok: true, error: null });
+  });
+
+  it('returns ok:false with an auth message when the stored key is rejected', async () => {
+    const load = vi.fn(async () => 'sk-revoked');
+    const verify = vi.fn(async () => {
+      throw new LlmAuthError('anthropic');
+    });
+    const { service } = makeService({ load, verify });
+
+    const result = await service.testCredential('org-1', 'anthropic');
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/rejected|authentication/i);
+  });
+
+  it('distinguishes a transient failure from an invalid key', async () => {
+    const load = vi.fn(async () => 'sk-ok');
+    const verify = vi.fn(async () => {
+      throw new Error('provider overloaded');
+    });
+    const { service } = makeService({ load, verify });
+
+    const result = await service.testCredential('org-1', 'openai');
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('provider overloaded');
+  });
+
+  it('returns ok:false (not a throw) when no key is configured', async () => {
+    const load = vi.fn(async () => null);
+    const verify = vi.fn();
+    const { service } = makeService({ load, verify });
+
+    const result = await service.testCredential('org-1', 'openai');
+
+    expect(result).toEqual({
+      provider: 'openai',
+      ok: false,
+      error: 'No key is configured for this provider.',
+    });
+    // No key → never probes the provider.
+    expect(verify).not.toHaveBeenCalled();
   });
 });
 
@@ -289,5 +414,53 @@ describe('LlmSettingsService.saveRouting', () => {
       modelPrimary: 'claude-sonnet-4-6',
       modelFast: 'claude-haiku-4-5-20251001',
     });
+  });
+
+  // Root-fix: the write chokepoint rejects a provider↔model mismatch, so the
+  // state that silently failed campaign runs can never be persisted.
+  it('rejects a primary model that does not belong to the provider (openai + claude-*)', async () => {
+    const configUpsert = upsertEcho();
+    const { service } = makeService({ configUpsert });
+
+    await expect(
+      service.saveRouting('org-1', {
+        teammate: 'campaign-orchestrator',
+        provider: 'openai',
+        modelPrimary: 'claude-sonnet-4-6',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    // Must not persist the invalid row.
+    expect(configUpsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects a fast model that does not belong to the provider (anthropic + gpt-*)', async () => {
+    const configUpsert = upsertEcho();
+    const { service } = makeService({ configUpsert });
+
+    await expect(
+      service.saveRouting('org-1', {
+        teammate: 'researcher',
+        provider: 'anthropic',
+        modelFast: 'gpt-4.1-mini',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(configUpsert).not.toHaveBeenCalled();
+  });
+
+  it('accepts a matching override and a forward-compatible new model in the family', async () => {
+    const configUpsert = upsertEcho();
+    const { service } = makeService({ configUpsert });
+
+    // gpt-5-future isn't a known id but matches the openai namespace → allowed.
+    const result = await service.saveRouting('org-1', {
+      teammate: 'sdr-drafter',
+      provider: 'openai',
+      modelPrimary: 'gpt-5-future',
+      modelFast: 'o3-mini',
+    });
+
+    expect(result.modelPrimary).toBe('gpt-5-future');
+    expect(result.modelFast).toBe('o3-mini');
+    expect(configUpsert).toHaveBeenCalled();
   });
 });

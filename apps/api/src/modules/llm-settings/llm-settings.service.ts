@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { Provider } from '@prisma/client';
 import type {
   LlmProviderName,
@@ -6,9 +6,16 @@ import type {
   LlmSettingsResponse,
   SaveLlmCredentialResponse,
   TeammateRoutingConfig,
+  TestLlmCredentialResponse,
 } from '@getbeyond/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { LlmCredentialManager } from '../teammates/runtime/llm-credential-manager';
+import { LlmAuthError } from '../teammates/runtime/llm-types';
+import {
+  isModelForProvider,
+  modelMismatchMessage,
+} from '../teammates/runtime/model-namespace';
+import { KeyVerifier } from './key-verifier';
 import { LLM_PROVIDER_NAMES } from './llm-settings.dto';
 
 /**
@@ -78,13 +85,16 @@ export class LlmSettingsService {
   // undefined under test. See getbeyond CLAUDE.md "NestJS DI — pitfall".
   private readonly prisma: PrismaService;
   private readonly credentials: LlmCredentialManager;
+  private readonly verifier: KeyVerifier;
 
   constructor(
     @Inject(PrismaService) prisma: PrismaService,
     @Inject(LlmCredentialManager) credentials: LlmCredentialManager,
+    @Inject(KeyVerifier) verifier: KeyVerifier,
   ) {
     this.prisma = prisma;
     this.credentials = credentials;
+    this.verifier = verifier;
   }
 
   /**
@@ -142,6 +152,7 @@ export class LlmSettingsService {
     return {
       providers,
       teammates,
+      providerDefaults: PROVIDER_DEFAULT_MODELS,
       envFallbackEnabled: process.env[ENV_FALLBACK_FLAG] === 'true',
     };
   }
@@ -157,8 +168,63 @@ export class LlmSettingsService {
     provider: LlmProviderName,
     apiKey: string,
   ): Promise<SaveLlmCredentialResponse> {
+    // Verify before persisting so a freshly-saved key always authenticated at
+    // least once — "Connected" can't be a lie at save time. Only a definitive
+    // auth rejection blocks the save; a transient provider error (network /
+    // overload) does NOT, so a provider outage can't stop a user configuring a
+    // genuinely-valid key. The Test action re-checks stored keys later.
+    try {
+      await this.verifier.verify(provider, apiKey);
+    } catch (err) {
+      if (err instanceof LlmAuthError) {
+        throw new BadRequestException(
+          'That API key was rejected by the provider (authentication failed). ' +
+            'Check the key and try again.',
+        );
+      }
+      // Non-auth failure (network / overload): allow the save to proceed.
+    }
     await this.credentials.save(orgId, toPrismaProvider(provider), apiKey);
     return { provider, configured: true };
+  }
+
+  /**
+   * Live-test the org's stored key for a provider: load it, make a cheap probe
+   * call, and report whether it authenticates. Returns a verdict (never throws
+   * for a bad key — an invalid key is a normal `ok: false` result, not a 500)
+   * and never echoes the key. This is what makes "Connected" honest: the status
+   * endpoint reports a key EXISTS; this reports whether it WORKS.
+   */
+  async testCredential(
+    orgId: string,
+    provider: LlmProviderName,
+  ): Promise<TestLlmCredentialResponse> {
+    const apiKey = await this.credentials.load(orgId, toPrismaProvider(provider));
+    if (!apiKey) {
+      return {
+        provider,
+        ok: false,
+        error: 'No key is configured for this provider.',
+      };
+    }
+    try {
+      await this.verifier.verify(provider, apiKey);
+      return { provider, ok: true, error: null };
+    } catch (err) {
+      if (err instanceof LlmAuthError) {
+        return {
+          provider,
+          ok: false,
+          error: 'The stored key was rejected (authentication failed).',
+        };
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        provider,
+        ok: false,
+        error: `Could not verify the key: ${message}`,
+      };
+    }
   }
 
   /**
@@ -178,6 +244,22 @@ export class LlmSettingsService {
     const defaults = PROVIDER_DEFAULT_MODELS[request.provider];
     const modelPrimary = request.modelPrimary ?? defaults.modelPrimary;
     const modelFast = request.modelFast ?? defaults.modelFast;
+
+    // Root-fix guard: reject a model id that doesn't belong to the chosen
+    // provider (e.g. an OpenAI route with a claude-* model). This is the single
+    // write chokepoint — blocking it here makes the inconsistent state that
+    // silently failed campaign runs impossible to persist from any client.
+    if (!isModelForProvider(request.provider, modelPrimary)) {
+      throw new BadRequestException(
+        modelMismatchMessage(request.provider, modelPrimary, 'modelPrimary'),
+      );
+    }
+    if (!isModelForProvider(request.provider, modelFast)) {
+      throw new BadRequestException(
+        modelMismatchMessage(request.provider, modelFast, 'modelFast'),
+      );
+    }
+
     const provider = toPrismaProvider(request.provider);
 
     const row = await this.prisma.orgTeammateConfig.upsert({

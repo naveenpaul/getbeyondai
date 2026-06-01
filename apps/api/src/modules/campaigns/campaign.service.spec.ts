@@ -113,6 +113,141 @@ describe('CampaignService.create', () => {
       expect.objectContaining({ winsListId: null }),
     );
   });
+
+  it('persists sourcing + budgetCents on the campaign row (DB is the source of truth, not just the job)', async () => {
+    const campaignCreate = vi.fn(async () => ({ id: 'c' }));
+    const { service } = makeService({ campaign: { create: campaignCreate } });
+
+    await service.create('org-1', 'user-1', {
+      goal: 'g',
+      sourcing: { provider: 'contact_list', listId: 'list-9' },
+      budgetCents: 750,
+    });
+
+    expect(campaignCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        sourcing: { provider: 'contact_list', listId: 'list-9' },
+        budgetCents: 750,
+      }),
+    });
+  });
+
+  it('omits sourcing + budgetCents from the row when absent (→ SQL NULL)', async () => {
+    const campaignCreate = vi.fn(async () => ({ id: 'c' }));
+    const { service } = makeService({ campaign: { create: campaignCreate } });
+
+    await service.create('org-1', 'user-1', { goal: 'g' });
+
+    expect(campaignCreate).toHaveBeenCalledWith({
+      data: expect.not.objectContaining({ sourcing: expect.anything() }),
+    });
+    expect(campaignCreate).toHaveBeenCalledWith({
+      data: expect.not.objectContaining({ budgetCents: expect.anything() }),
+    });
+  });
+});
+
+describe('CampaignService.rerun', () => {
+  const sourceRow = {
+    id: 'camp-old',
+    orgId: 'org-1',
+    title: 'My campaign',
+    goal: 'find lookalikes',
+    status: 'failed',
+    winsListId: 'wins-1',
+    sourcing: { provider: 'contact_list', listId: 'list-1' },
+    budgetCents: 500,
+    createdBy: 'user-old',
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+
+  it('clones the persisted config into a new campaign and enqueues it', async () => {
+    const campaignFindUnique = vi.fn(async () => sourceRow);
+    const campaignCreate = vi.fn(async () => ({ id: 'camp-new' }));
+    const send = vi.fn(async () => undefined);
+    const { service } = makeService({
+      campaign: { findUnique: campaignFindUnique, create: campaignCreate },
+      send,
+    });
+
+    const result = await service.rerun('org-1', 'camp-old', 'user-runner');
+
+    expect(result).toEqual({ campaignId: 'camp-new', status: 'running' });
+    // New row keeps the original title/goal/wins/sourcing/budget; the
+    // re-runner (not the original creator) is recorded as createdBy.
+    expect(campaignCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orgId: 'org-1',
+        createdBy: 'user-runner',
+        title: 'My campaign',
+        goal: 'find lookalikes',
+        winsListId: 'wins-1',
+        sourcing: { provider: 'contact_list', listId: 'list-1' },
+        budgetCents: 500,
+        status: 'running',
+      }),
+    });
+    expect(send).toHaveBeenCalledWith(
+      CAMPAIGN_RUN_QUEUE,
+      expect.objectContaining({
+        campaignId: 'camp-new',
+        winsListId: 'wins-1',
+        sourcing: { provider: 'contact_list', listId: 'list-1' },
+        budgetCents: 500,
+      }),
+    );
+  });
+
+  it('clones a campaign that had no source or budget', async () => {
+    const campaignFindUnique = vi.fn(async () => ({
+      ...sourceRow,
+      sourcing: null,
+      budgetCents: null,
+    }));
+    const campaignCreate = vi.fn(async () => ({ id: 'camp-new2' }));
+    const send = vi.fn(async () => undefined);
+    const { service } = makeService({
+      campaign: { findUnique: campaignFindUnique, create: campaignCreate },
+      send,
+    });
+
+    await service.rerun('org-1', 'camp-old', 'user-runner');
+
+    // Null source/budget round-trips to an omitted row + null job sourcing.
+    expect(campaignCreate).toHaveBeenCalledWith({
+      data: expect.not.objectContaining({ sourcing: expect.anything() }),
+    });
+    expect(send).toHaveBeenCalledWith(
+      CAMPAIGN_RUN_QUEUE,
+      expect.objectContaining({ sourcing: null }),
+    );
+  });
+
+  it('throws NotFoundException when the source campaign does not exist', async () => {
+    const { service } = makeService({
+      campaign: { findUnique: vi.fn(async () => null) },
+    });
+
+    await expect(service.rerun('org-1', 'missing', 'u')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
+
+  it('rejects + does not enqueue when the campaign belongs to another org', async () => {
+    const send = vi.fn(async () => undefined);
+    const { service } = makeService({
+      campaign: {
+        findUnique: vi.fn(async () => ({ ...sourceRow, orgId: 'org-OTHER' })),
+      },
+      send,
+    });
+
+    await expect(
+      service.rerun('org-1', 'camp-old', 'u'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(send).not.toHaveBeenCalled();
+  });
 });
 
 describe('CampaignService.list', () => {

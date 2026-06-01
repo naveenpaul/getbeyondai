@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
 import { LlmCredentialManager } from '../teammates/runtime/llm-credential-manager';
+import { KeyVerifier } from './key-verifier';
 import { LlmSettingsController } from './llm-settings.controller';
 import { LlmSettingsService } from './llm-settings.service';
 
@@ -16,6 +17,6 @@ import { LlmSettingsService } from './llm-settings.service';
 @Module({
   imports: [PrismaModule, AuthModule],
   controllers: [LlmSettingsController],
-  providers: [LlmSettingsService, LlmCredentialManager],
+  providers: [LlmSettingsService, LlmCredentialManager, KeyVerifier],
 })
 export class LlmSettingsModule {}

@@ -13,6 +13,7 @@ import type {
   IcpSummary,
   QualifiedCandidate,
   ResearcherDraftClaim,
+  SourcingConfig,
 } from '@getbeyond/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
@@ -54,6 +55,7 @@ export class CampaignService {
     req: CreateCampaignRequest,
   ): Promise<CreateCampaignResponse> {
     const winsListId = req.winsListId ?? null;
+    const sourcing = req.sourcing ?? null;
     const campaign = await this.prisma.campaign.create({
       data: {
         orgId,
@@ -62,6 +64,11 @@ export class CampaignService {
         status: 'running',
         winsListId,
         createdBy,
+        // Persist the run config so the campaign can be re-run faithfully and so
+        // detail can report what it used. Omit (→ SQL NULL) when absent rather
+        // than threading Prisma.JsonNull through.
+        ...(sourcing !== null ? { sourcing } : {}),
+        ...(req.budgetCents !== undefined ? { budgetCents: req.budgetCents } : {}),
       },
     });
 
@@ -71,11 +78,45 @@ export class CampaignService {
       triggeredBy: createdBy,
       goal: req.goal,
       winsListId,
-      sourcing: req.sourcing ?? null,
+      sourcing,
       budgetCents: req.budgetCents,
     });
 
     return { campaignId: campaign.id, status: 'running' };
+  }
+
+  /**
+   * Re-run a campaign: clone its persisted run config (goal, title, wins list,
+   * sourcing, budget) into a NEW campaign and enqueue a fresh run. Cloning (vs
+   * re-enqueueing in place) keeps the original campaign's record + history
+   * intact and yields a new campaignId the caller can stream. Org-scoped: a
+   * campaign from another org is invisible (NotFound semantics via the guard
+   * below). Returns the new campaign, exactly like create.
+   */
+  async rerun(
+    orgId: string,
+    campaignId: string,
+    createdBy: string,
+  ): Promise<CreateCampaignResponse> {
+    const source = await this.prisma.campaign.findUnique({
+      where: { id: campaignId },
+    });
+    if (!source) {
+      throw new NotFoundException(`Campaign ${campaignId} not found`);
+    }
+    if (source.orgId !== orgId) {
+      throw new ForbiddenException('Campaign belongs to another org');
+    }
+
+    return this.create(orgId, createdBy, {
+      goal: source.goal,
+      title: source.title,
+      winsListId: source.winsListId,
+      sourcing: (source.sourcing as unknown as SourcingConfig | null) ?? null,
+      ...(source.budgetCents !== null
+        ? { budgetCents: source.budgetCents }
+        : {}),
+    });
   }
 
   /** List the org's campaigns, newest first, with a live candidate count. */

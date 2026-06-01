@@ -1,11 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import {
-  TERMINAL_CAMPAIGN_EVENT_TYPES,
-  type CampaignEvent,
-  type CampaignEventType,
-} from '@getbeyond/shared';
+import type { CampaignEvent, CampaignEventType } from '@getbeyond/shared';
 import { buildCampaignStreamUrl } from './api-client';
 
 /**
@@ -54,6 +50,17 @@ const HANDLED_TYPES: readonly CampaignEventType[] = [
   'tool_activity',
 ];
 
+// Terminal event types: when one arrives we stop listening and close the stream.
+// Defined locally (typed against the shared CampaignEventType union, so it can't
+// drift from the contract) rather than importing the shared runtime Set —
+// @getbeyond/shared is a CommonJS build, and importing a runtime value from it
+// into a client module trips Next's React Fast Refresh ("Cannot use 'import.meta'
+// outside a module"). All other shared usage here is type-only and erased.
+const TERMINAL_TYPES: ReadonlySet<CampaignEventType> = new Set([
+  'campaign_completed',
+  'campaign_failed',
+]);
+
 export function useCampaignStream({
   campaignId,
 }: UseCampaignStreamArgs): UseCampaignStreamResult {
@@ -96,7 +103,7 @@ export function useCampaignStream({
       deliveredRef.current.add(key);
 
       setEvents((prev) => [...prev, parsed]);
-      if (TERMINAL_CAMPAIGN_EVENT_TYPES.has(parsed.type)) {
+      if (TERMINAL_TYPES.has(parsed.type)) {
         setTerminated(true);
         es.close();
         setConnectionState('closed');
