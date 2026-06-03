@@ -5,35 +5,35 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type {
-  CampaignDetailResponse,
-  CampaignListResponse,
-  CampaignSummary,
-  CreateCampaignRequest,
-  CreateCampaignResponse,
+  ProspectSearchDetailResponse,
+  ProspectSearchListResponse,
+  ProspectSearchSummary,
+  CreateProspectSearchRequest,
+  CreateProspectSearchResponse,
   IcpSummary,
-  QualifiedCandidate,
+  QualifiedProspect,
   ResearcherDraftClaim,
   SourcingConfig,
 } from '@getbeyond/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
 import {
-  CAMPAIGN_RUN_QUEUE,
-  type CampaignRunJobPayload,
-} from './campaign.worker';
-import { CAMPAIGN_TEAMMATE, ICP_PHASE } from './campaign-orchestrator';
+  PROSPECT_SEARCH_RUN_QUEUE,
+  type ProspectSearchRunJobPayload,
+} from './prospect-search.worker';
+import { PROSPECT_SEARCH_TEAMMATE, ICP_PHASE } from './prospect-search-orchestrator';
 
 /**
- * Campaign reads + create/enqueue. The orchestration itself runs on the
- * CampaignWorker (pg-boss) — this service owns the synchronous API surface:
- * mint the Campaign row, enqueue the run, and serve list/detail reads scoped to
+ * ProspectSearch reads + create/enqueue. The orchestration itself runs on the
+ * ProspectSearchWorker (pg-boss) — this service owns the synchronous API surface:
+ * mint the ProspectSearch row, enqueue the run, and serve list/detail reads scoped to
  * the caller's org.
  *
  * Identity (orgId, createdBy) is always passed in by the controller from the
  * session — never from the request body (invariant: identity from session).
  */
 @Injectable()
-export class CampaignService {
+export class ProspectSearchService {
   private readonly prisma: PrismaService;
   private readonly queue: QueueService;
 
@@ -46,17 +46,17 @@ export class CampaignService {
   }
 
   /**
-   * Create a Campaign (status='running') and enqueue the orchestrator job.
-   * Returns the campaignId so the caller can open the SSE stream immediately.
+   * Create a ProspectSearch (status='running') and enqueue the orchestrator job.
+   * Returns the prospectSearchId so the caller can open the SSE stream immediately.
    */
   async create(
     orgId: string,
     createdBy: string,
-    req: CreateCampaignRequest,
-  ): Promise<CreateCampaignResponse> {
+    req: CreateProspectSearchRequest,
+  ): Promise<CreateProspectSearchResponse> {
     const winsListId = req.winsListId ?? null;
     const sourcing = req.sourcing ?? null;
-    const campaign = await this.prisma.campaign.create({
+    const prospectSearch = await this.prisma.prospectSearch.create({
       data: {
         orgId,
         title: req.title ?? deriveTitle(req.goal),
@@ -64,7 +64,7 @@ export class CampaignService {
         status: 'running',
         winsListId,
         createdBy,
-        // Persist the run config so the campaign can be re-run faithfully and so
+        // Persist the run config so the prospectSearch can be re-run faithfully and so
         // detail can report what it used. Omit (→ SQL NULL) when absent rather
         // than threading Prisma.JsonNull through.
         ...(sourcing !== null ? { sourcing } : {}),
@@ -72,8 +72,8 @@ export class CampaignService {
       },
     });
 
-    await this.queue.send<CampaignRunJobPayload>(CAMPAIGN_RUN_QUEUE, {
-      campaignId: campaign.id,
+    await this.queue.send<ProspectSearchRunJobPayload>(PROSPECT_SEARCH_RUN_QUEUE, {
+      prospectSearchId: prospectSearch.id,
       orgId,
       triggeredBy: createdBy,
       goal: req.goal,
@@ -82,30 +82,30 @@ export class CampaignService {
       budgetCents: req.budgetCents,
     });
 
-    return { campaignId: campaign.id, status: 'running' };
+    return { prospectSearchId: prospectSearch.id, status: 'running' };
   }
 
   /**
-   * Re-run a campaign: clone its persisted run config (goal, title, wins list,
-   * sourcing, budget) into a NEW campaign and enqueue a fresh run. Cloning (vs
-   * re-enqueueing in place) keeps the original campaign's record + history
-   * intact and yields a new campaignId the caller can stream. Org-scoped: a
-   * campaign from another org is invisible (NotFound semantics via the guard
-   * below). Returns the new campaign, exactly like create.
+   * Re-run a prospectSearch: clone its persisted run config (goal, title, wins list,
+   * sourcing, budget) into a NEW prospectSearch and enqueue a fresh run. Cloning (vs
+   * re-enqueueing in place) keeps the original prospectSearch's record + history
+   * intact and yields a new prospectSearchId the caller can stream. Org-scoped: a
+   * prospectSearch from another org is invisible (NotFound semantics via the guard
+   * below). Returns the new prospectSearch, exactly like create.
    */
   async rerun(
     orgId: string,
-    campaignId: string,
+    prospectSearchId: string,
     createdBy: string,
-  ): Promise<CreateCampaignResponse> {
-    const source = await this.prisma.campaign.findUnique({
-      where: { id: campaignId },
+  ): Promise<CreateProspectSearchResponse> {
+    const source = await this.prisma.prospectSearch.findUnique({
+      where: { id: prospectSearchId },
     });
     if (!source) {
-      throw new NotFoundException(`Campaign ${campaignId} not found`);
+      throw new NotFoundException(`ProspectSearch ${prospectSearchId} not found`);
     }
     if (source.orgId !== orgId) {
-      throw new ForbiddenException('Campaign belongs to another org');
+      throw new ForbiddenException('ProspectSearch belongs to another org');
     }
 
     return this.create(orgId, createdBy, {
@@ -119,34 +119,34 @@ export class CampaignService {
     });
   }
 
-  /** List the org's campaigns, newest first, with a live candidate count. */
-  async list(orgId: string): Promise<CampaignListResponse> {
-    const campaigns = await this.prisma.campaign.findMany({
+  /** List the org's prospectSearches, newest first, with a live prospect count. */
+  async list(orgId: string): Promise<ProspectSearchListResponse> {
+    const prospectSearches = await this.prisma.prospectSearch.findMany({
       where: { orgId },
       orderBy: { createdAt: 'desc' },
-      include: { _count: { select: { candidates: true } } },
+      include: { _count: { select: { prospects: true } } },
     });
     return {
-      items: campaigns.map((c) =>
-        toSummary(c, c._count.candidates),
+      items: prospectSearches.map((c) =>
+        toSummary(c, c._count.prospects),
       ),
     };
   }
 
   /**
-   * Campaign detail: the campaign summary, the derived ICP (read back from the
-   * derive-icp AgentRun's inputContext), and the ranked candidates — each with
+   * ProspectSearch detail: the prospectSearch summary, the derived ICP (read back from the
+   * derive-icp AgentRun's inputContext), and the ranked prospects — each with
    * the cited claims joined from its linked Researcher Draft.
    */
   async detail(
     orgId: string,
-    campaignId: string,
-  ): Promise<CampaignDetailResponse> {
-    const campaign = await this.prisma.campaign.findUnique({
-      where: { id: campaignId },
+    prospectSearchId: string,
+  ): Promise<ProspectSearchDetailResponse> {
+    const prospectSearch = await this.prisma.prospectSearch.findUnique({
+      where: { id: prospectSearchId },
       include: {
-        _count: { select: { candidates: true } },
-        candidates: {
+        _count: { select: { prospects: true } },
+        prospects: {
           orderBy: { fitScore: 'desc' },
           // Stage 5 contacts sourced at each company (source-agnostic — Snov,
           // ZoomInfo, …), surfaced so the user sees who to reach out to.
@@ -154,20 +154,20 @@ export class CampaignService {
         },
       },
     });
-    if (!campaign) {
-      throw new NotFoundException(`Campaign ${campaignId} not found`);
+    if (!prospectSearch) {
+      throw new NotFoundException(`ProspectSearch ${prospectSearchId} not found`);
     }
-    if (campaign.orgId !== orgId) {
-      throw new ForbiddenException('Campaign belongs to another org');
+    if (prospectSearch.orgId !== orgId) {
+      throw new ForbiddenException('ProspectSearch belongs to another org');
     }
 
-    // Join claims for every candidate's linked Draft in one query.
-    const draftIds = campaign.candidates
+    // Join claims for every prospect's linked Draft in one query.
+    const draftIds = prospectSearch.prospects
       .map((c) => c.draftId)
       .filter((id): id is string => id !== null);
     const claimsByDraft = await this.loadClaimsByDraft(draftIds);
 
-    const candidates: QualifiedCandidate[] = campaign.candidates.map((c) => ({
+    const prospects: QualifiedProspect[] = prospectSearch.prospects.map((c) => ({
       name: c.name,
       domain: c.domain,
       linkedinUrl: c.linkedinUrl,
@@ -185,12 +185,12 @@ export class CampaignService {
       })),
     }));
 
-    const icp = await this.loadIcp(orgId, campaignId);
+    const icp = await this.loadIcp(orgId, prospectSearchId);
 
     return {
-      campaign: toSummary(campaign, campaign._count.candidates),
+      prospectSearch: toSummary(prospectSearch, prospectSearch._count.prospects),
       icp,
-      candidates,
+      prospects,
     };
   }
 
@@ -221,21 +221,21 @@ export class CampaignService {
 
   /**
    * Read the derived ICP back from the most recent ICP-derivation AgentRun for
-   * this campaign (the orchestrator persists the IcpSummary into inputContext).
-   * Returns null when the campaign hasn't derived an ICP yet (still sourcing or
+   * this prospectSearch (the orchestrator persists the IcpSummary into inputContext).
+   * Returns null when the prospectSearch hasn't derived an ICP yet (still sourcing or
    * failed before ICP).
    */
   private async loadIcp(
     orgId: string,
-    campaignId: string,
+    prospectSearchId: string,
   ): Promise<IcpSummary | null> {
     const run = await this.prisma.agentRun.findFirst({
       where: {
         orgId,
-        teammate: CAMPAIGN_TEAMMATE,
+        teammate: PROSPECT_SEARCH_TEAMMATE,
         inputContext: { path: ['phase'], equals: ICP_PHASE },
         AND: [
-          { inputContext: { path: ['campaignId'], equals: campaignId } },
+          { inputContext: { path: ['prospectSearchId'], equals: prospectSearchId } },
         ],
       },
       orderBy: { startedAt: 'desc' },
@@ -249,7 +249,7 @@ export class CampaignService {
   }
 }
 
-/** Map a Campaign row (+ candidate count) to the public summary shape. */
+/** Map a ProspectSearch row (+ prospect count) to the public summary shape. */
 function toSummary(
   c: {
     id: string;
@@ -259,23 +259,23 @@ function toSummary(
     createdAt: Date;
     updatedAt: Date;
   },
-  candidateCount: number,
-): CampaignSummary {
+  prospectCount: number,
+): ProspectSearchSummary {
   return {
     id: c.id,
     title: c.title,
     goal: c.goal,
-    status: c.status as CampaignSummary['status'],
+    status: c.status as ProspectSearchSummary['status'],
     createdAt: c.createdAt.toISOString(),
     updatedAt: c.updatedAt.toISOString(),
-    candidateCount,
+    prospectCount,
   };
 }
 
 /** Derive a short display title from the goal when the user didn't supply one. */
 export function deriveTitle(goal: string): string {
   const trimmed = goal.trim().replace(/\s+/g, ' ');
-  if (trimmed.length <= TITLE_MAX_LEN) return trimmed || 'Untitled campaign';
+  if (trimmed.length <= TITLE_MAX_LEN) return trimmed || 'Untitled prospectSearch';
   return trimmed.slice(0, TITLE_MAX_LEN - 1).trimEnd() + '…';
 }
 

@@ -217,7 +217,7 @@ describe.skipIf(!DATABASE_URL)(
       expect(contacts).toHaveLength(2);
 
       // The import groups the contacts into a ContactList named after the
-      // uploaded file ("leads.csv" → "leads"), ready for campaign sourcing.
+      // uploaded file ("leads.csv" → "leads"), ready for prospect search sourcing.
       const lists = await prisma.contactList.findMany({
         where: { orgId: alice.orgId },
       });

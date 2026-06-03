@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PrismaClient } from '@prisma/client';
-import type { CampaignEvent, NormalizedContact } from '@getbeyond/shared';
-import { CampaignOrchestrator } from './campaign-orchestrator';
+import type { ProspectSearchEvent, NormalizedContact } from '@getbeyond/shared';
+import { ProspectSearchOrchestrator } from './prospect-search-orchestrator';
 import type { LlmProvider } from '../teammates/runtime/llm-provider';
 import type { CreateMessageResult } from '../teammates/runtime/llm-types';
 import type {
@@ -20,7 +20,7 @@ import type {
  * Drives the REAL orchestrator + REAL upsertContact + REAL callModel through a
  * full run(): discover one company → qualify/rank (canned LLM + stubbed
  * Researcher) → Stage 5 waterfall (a fake connector) → assert the Contact +
- * ContactSource provenance + the CampaignCandidate↔Contact link land in the DB.
+ * ContactSource provenance + the Prospect↔Contact link land in the DB.
  * Proves the cross-cutting glue the unit tests stub: the join model + migration,
  * upsert provenance/tier, and org-global contact dedup across re-runs.
  */
@@ -60,7 +60,7 @@ function cannedLlm(): LlmProvider {
   };
 }
 
-function candidate(name: string, domain: string): CandidateCompany {
+function prospect(name: string, domain: string): CandidateCompany {
   return { name, domain, linkedinUrl: null, employeeCount: null, fundingStage: null, raw: {} };
 }
 
@@ -101,12 +101,12 @@ const CONTACT: NormalizedContact = {
 };
 
 describe.skipIf(!DATABASE_URL)(
-  'campaign Stage 5 contact sourcing (integration — needs live Postgres)',
+  'prospectSearch Stage 5 contact sourcing (integration — needs live Postgres)',
   () => {
     let prisma: PrismaClient;
     let orgId: string;
     let snovAccountId: string;
-    let campaignId: string;
+    let prospectSearchId: string;
 
     beforeAll(async () => {
       const dbName = new URL(DATABASE_URL!).pathname.replace(/^\//, '');
@@ -123,7 +123,7 @@ describe.skipIf(!DATABASE_URL)(
 
     beforeEach(async () => {
       await prisma.$executeRawUnsafe(`
-        TRUNCATE TABLE organizations, connector_accounts, campaigns, contacts,
+        TRUNCATE TABLE organizations, connector_accounts, prospect_searches, contacts,
           agent_runs RESTART IDENTITY CASCADE
       `);
       const o = await prisma.organization.create({ data: { name: 'OrgA' } });
@@ -137,7 +137,7 @@ describe.skipIf(!DATABASE_URL)(
         },
       });
       snovAccountId = snov.id;
-      const campaign = await prisma.campaign.create({
+      const prospectSearch = await prisma.prospectSearch.create({
         data: {
           orgId,
           title: 'C1',
@@ -146,12 +146,12 @@ describe.skipIf(!DATABASE_URL)(
           status: 'running',
         },
       });
-      campaignId = campaign.id;
+      prospectSearchId = prospectSearch.id;
     });
 
     /** Build the orchestrator with a fake connector that yields `contacts`. */
-    function orchestrator(contacts: NormalizedContact[]): CampaignOrchestrator {
-      const events: CampaignEvent[] = [];
+    function orchestrator(contacts: NormalizedContact[]): ProspectSearchOrchestrator {
+      const events: ProspectSearchEvent[] = [];
       const connector: WaterfallConnector = {
         kind: 'snov',
         accountId: snovAccountId,
@@ -160,11 +160,11 @@ describe.skipIf(!DATABASE_URL)(
           for (const c of contacts) yield c;
         },
       };
-      return new CampaignOrchestrator({
+      return new ProspectSearchOrchestrator({
         prisma,
         llm: cannedLlm(),
         buildSourcingProvider: async () =>
-          sourcingProvider([candidate('Acme', 'acme.com')]),
+          sourcingProvider([prospect('Acme', 'acme.com')]),
         buildContactSourcers: async () => [connector],
         emitEvent: (e) => events.push(e),
         runResearch: stubResearch(),
@@ -173,7 +173,7 @@ describe.skipIf(!DATABASE_URL)(
 
     async function runOnce(): Promise<void> {
       const result = await orchestrator([CONTACT]).run({
-        campaignId,
+        prospectSearchId,
         orgId,
         triggeredBy: 'user-1',
         goal: 'Find SaaS lookalikes',
@@ -181,17 +181,17 @@ describe.skipIf(!DATABASE_URL)(
         budgetCents: 100_000,
       });
       expect(result.status).toBe('completed');
-      expect(result.candidateCount).toBe(1);
+      expect(result.prospectCount).toBe(1);
     }
 
-    it('sources a contact, persists it with provenance, and links it to the candidate', async () => {
+    it('sources a contact, persists it with provenance, and links it to the prospect', async () => {
       await runOnce();
 
-      const candidates = await prisma.campaignCandidate.findMany({
-        where: { campaignId },
+      const prospects = await prisma.prospect.findMany({
+        where: { prospectSearchId },
       });
-      expect(candidates).toHaveLength(1);
-      expect(candidates[0]!.domain).toBe('acme.com');
+      expect(prospects).toHaveLength(1);
+      expect(prospects[0]!.domain).toBe('acme.com');
 
       const contacts = await prisma.contact.findMany({ where: { orgId } });
       expect(contacts).toHaveLength(1);
@@ -205,9 +205,9 @@ describe.skipIf(!DATABASE_URL)(
       expect(sources).toHaveLength(1);
       expect(sources[0]!.sourceAccountId).toBe(snovAccountId);
 
-      // The candidate↔contact link with source provenance.
-      const links = await prisma.campaignCandidateContact.findMany({
-        where: { campaignCandidateId: candidates[0]!.id },
+      // The prospect↔contact link with source provenance.
+      const links = await prisma.prospectContact.findMany({
+        where: { prospectId: prospects[0]!.id },
       });
       expect(links).toHaveLength(1);
       expect(links[0]!.contactId).toBe(contacts[0]!.id);
@@ -215,12 +215,12 @@ describe.skipIf(!DATABASE_URL)(
       expect(links[0]!.emailVerification).toBe('verified');
     });
 
-    it('dedupes the contact across re-runs (org-global identity), linking each candidate', async () => {
+    it('dedupes the contact across re-runs (org-global identity), linking each prospect', async () => {
       await runOnce();
-      // Re-run the same campaign: a second CampaignCandidate is created, but the
+      // Re-run the same prospectSearch: a second Prospect is created, but the
       // contact (same email) must NOT duplicate — upsert resolves to one row.
-      campaignId = (
-        await prisma.campaign.create({
+      prospectSearchId = (
+        await prisma.prospectSearch.create({
           data: {
             orgId,
             title: 'C2',
@@ -235,10 +235,10 @@ describe.skipIf(!DATABASE_URL)(
       const contacts = await prisma.contact.findMany({ where: { orgId } });
       expect(contacts).toHaveLength(1); // org-global dedup by email
 
-      const links = await prisma.campaignCandidateContact.findMany({
+      const links = await prisma.prospectContact.findMany({
         where: { contactId: contacts[0]!.id },
       });
-      expect(links).toHaveLength(2); // one per candidate across the two runs
+      expect(links).toHaveLength(2); // one per prospect across the two runs
     });
   },
 );

@@ -1,8 +1,17 @@
 # Plan: Rename `Campaign` → `ProspectSearch` / `Prospect` (backend + contract)
 
-**Status:** Planned, NOT started. Deferred by decision (2026-06-03): UI display
-copy is already relabeled; the backend/DB/contract rename waits until the open
-branches merge.
+**Status:** ✅ DONE (2026-06-03). Executed on branch
+`refactor/campaign-to-prospect-rename` once all open feature branches merged to
+`main`. Shared contracts, Prisma schema + data-preserving RENAME migration
+(`20260603150000_rename_campaign_to_prospect_search`), API module
+(`modules/prospect-search`, route `/prospect-searches`, teammate slug
+`prospect-search-orchestrator` + `org_teammate_configs` data migration), and web
+(route `/prospects`, api-client, components/hooks) all renamed. tsc clean (only
+pre-existing spec errors remain); full API unit suite 762/762 green;
+dependency-cruiser 0 errors. Decision delta from plan: the detail-response field
+is `prospectSearch` (not `search`); the sourcing/scoring layer keeps its generic
+`candidate` vocab (`CandidateCompany`, `scoreCandidate`) — candidates are sourced,
+prospects are persisted.
 **Decision (2026-06-03):** workspace = "Prospects"; the run entity
 `Campaign` → **`ProspectSearch`**; the candidate company
 `CampaignCandidate` → **`Prospect`**. Rationale: "prospect" already describes the

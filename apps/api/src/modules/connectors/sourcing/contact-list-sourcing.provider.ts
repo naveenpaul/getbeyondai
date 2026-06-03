@@ -14,7 +14,7 @@ import type {
  * Retrieval ignores the ICP — the pool is pre-defined by the user; ICP matching
  * is the orchestrator's qualifier job (and the Researcher derives + cites the
  * firmographics this provider can't supply). One instance is bound per run with
- * the campaign's (orgId, listId).
+ * the prospect search's (orgId, listId).
  *
  * Cross-org isolation: every read is filtered through `list.orgId`, so a list
  * belonging to another org is structurally unreachable — it simply yields zero

@@ -7,7 +7,7 @@ import {
 import { ApolloSourcingProvider } from '../connectors/sourcing/apollo-sourcing.provider';
 import { ContactListSourcingProvider } from '../connectors/sourcing/contact-list-sourcing.provider';
 import { SourcingUnavailableError } from '../connectors/sourcing/sourcing-provider';
-import { buildContactSourcers, buildSourcingProvider } from './campaign.worker';
+import { buildContactSourcers, buildSourcingProvider } from './prospect-search.worker';
 
 /**
  * Unit tests for the worker's `buildSourcingProvider` factory. The worker class

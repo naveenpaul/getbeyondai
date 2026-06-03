@@ -19,7 +19,7 @@ import {
  *        `DATABASE_URL=postgresql://postgres:postgres@localhost:5432/getbeyond_test \
  *         pnpm --filter '@getbeyond/api' test:integration`
  *
- * Safety: TRUNCATEs company_signals / campaign_candidates / campaigns /
+ * Safety: TRUNCATEs company_signals / prospects / prospect_searches /
  * organizations before each test. Refuses to run unless the DB name contains
  * 'test'.
  */
@@ -30,14 +30,14 @@ describe.skipIf(!DATABASE_URL)(
   'CompanySignal repository (integration — needs live Postgres + applied migrations)',
   () => {
     let prisma: PrismaClient;
-    let candidateId: string;
+    let prospectId: string;
 
     beforeAll(() => {
       const dbName = (DATABASE_URL ?? '').split('/').pop()?.split('?')[0] ?? '';
       if (!dbName.includes('test')) {
         throw new Error(
           `Refusing to run: DATABASE_URL db "${dbName}" does not contain 'test'. ` +
-            `Tests TRUNCATE signal/campaign/org tables on each run.`,
+            `Tests TRUNCATE signal/prospect/org tables on each run.`,
         );
       }
       prisma = new PrismaClient();
@@ -49,10 +49,10 @@ describe.skipIf(!DATABASE_URL)(
 
     beforeEach(async () => {
       await prisma.$executeRawUnsafe(
-        `TRUNCATE TABLE "company_signals", "campaign_candidates", "campaigns", "organizations" RESTART IDENTITY CASCADE`,
+        `TRUNCATE TABLE "company_signals", "prospects", "prospect_searches", "organizations" RESTART IDENTITY CASCADE`,
       );
       const org = await prisma.organization.create({ data: { name: 'OrgA' } });
-      const campaign = await prisma.campaign.create({
+      const prospectSearch = await prisma.prospectSearch.create({
         data: {
           orgId: org.id,
           title: 'Q3 prospects',
@@ -60,21 +60,21 @@ describe.skipIf(!DATABASE_URL)(
           createdBy: 'user-1',
         },
       });
-      const candidate = await prisma.campaignCandidate.create({
+      const prospect = await prisma.prospect.create({
         data: {
-          campaignId: campaign.id,
+          prospectSearchId: prospectSearch.id,
           name: 'Acme',
           domain: 'acme.com',
           fitScore: 0.8,
           rationale: 'matches ICP',
         },
       });
-      candidateId = candidate.id;
+      prospectId = prospect.id;
     });
 
     it('creates a signal observation', async () => {
       const signal = await upsertCompanySignal(prisma, {
-        candidateId,
+        prospectId,
         key: 'recently_funded',
         status: 'present',
         source: 'connector',
@@ -87,15 +87,15 @@ describe.skipIf(!DATABASE_URL)(
       expect(signal.detectedAt?.toISOString()).toBe('2026-05-01T00:00:00.000Z');
     });
 
-    it('upsert is idempotent on (candidateId, key) — re-eval UPDATES, no duplicate', async () => {
+    it('upsert is idempotent on (prospectId, key) — re-eval UPDATES, no duplicate', async () => {
       await upsertCompanySignal(prisma, {
-        candidateId,
+        prospectId,
         key: 'hiring_for_role',
         status: 'unknown',
         source: 'research',
       });
       const updated = await upsertCompanySignal(prisma, {
-        candidateId,
+        prospectId,
         key: 'hiring_for_role',
         status: 'present',
         source: 'research',
@@ -103,7 +103,7 @@ describe.skipIf(!DATABASE_URL)(
         detectedAt: new Date('2026-06-01T00:00:00Z'),
       });
 
-      const all = await listCompanySignals(prisma, candidateId);
+      const all = await listCompanySignals(prisma, prospectId);
       expect(all).toHaveLength(1);
       expect(all[0]?.id).toBe(updated.id);
       expect(all[0]?.status).toBe('present');
@@ -113,19 +113,19 @@ describe.skipIf(!DATABASE_URL)(
     it('rejects a present research signal with no citation (cite-or-abstain) before writing', async () => {
       await expect(
         upsertCompanySignal(prisma, {
-          candidateId,
+          prospectId,
           key: 'has_problem',
           status: 'present',
           source: 'research',
         }),
       ).rejects.toThrow(InvalidSignalObservationError);
-      expect(await listCompanySignals(prisma, candidateId)).toHaveLength(0);
+      expect(await listCompanySignals(prisma, prospectId)).toHaveLength(0);
     });
 
     it('rejects an unregistered signal key before writing', async () => {
       await expect(
         upsertCompanySignal(prisma, {
-          candidateId,
+          prospectId,
           key: 'totally_made_up',
           status: 'present',
           source: 'connector',
@@ -135,19 +135,19 @@ describe.skipIf(!DATABASE_URL)(
 
     it('lists multiple signals for a candidate', async () => {
       await upsertCompanySignal(prisma, {
-        candidateId,
+        prospectId,
         key: 'has_problem',
         status: 'present',
         source: 'research',
         citationId: 'c1',
       });
       await upsertCompanySignal(prisma, {
-        candidateId,
+        prospectId,
         key: 'reachable_decision_maker',
         status: 'present',
         source: 'computed',
       });
-      const all = await listCompanySignals(prisma, candidateId);
+      const all = await listCompanySignals(prisma, prospectId);
       expect(all.map((s) => s.key).sort()).toEqual([
         'has_problem',
         'reachable_decision_maker',
@@ -156,15 +156,15 @@ describe.skipIf(!DATABASE_URL)(
 
     it('cascades: deleting the candidate removes its signals', async () => {
       await upsertCompanySignal(prisma, {
-        candidateId,
+        prospectId,
         key: 'has_problem',
         status: 'present',
         source: 'research',
         citationId: 'c1',
       });
-      await prisma.campaignCandidate.delete({ where: { id: candidateId } });
+      await prisma.prospect.delete({ where: { id: prospectId } });
       const orphans = await prisma.companySignal.findMany({
-        where: { candidateId },
+        where: { prospectId },
       });
       expect(orphans).toHaveLength(0);
     });

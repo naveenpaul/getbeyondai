@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '@prisma/client';
-import type { CampaignEvent, RunEvent } from '@getbeyond/shared';
+import type { ProspectSearchEvent, RunEvent } from '@getbeyond/shared';
 import {
-  CampaignOrchestrator,
-  CAMPAIGN_TEAMMATE,
+  ProspectSearchOrchestrator,
+  PROSPECT_SEARCH_TEAMMATE,
   ICP_PHASE,
   extractText,
   parseIcp,
   parseScore,
-} from './campaign-orchestrator';
+} from './prospect-search-orchestrator';
 import { BudgetExceededError } from '../teammates/runtime/cost';
 import type { LlmProvider } from '../teammates/runtime/llm-provider';
 import type { CreateMessageResult } from '../teammates/runtime/llm-types';
@@ -26,7 +26,7 @@ import type {
 
 /**
  * Orchestrator unit tests. The orchestrator is built for injection
- * (`CampaignOrchestratorDeps`): a fake Prisma, a fake LlmProvider (so the REAL
+ * (`ProspectSearchOrchestratorDeps`): a fake Prisma, a fake LlmProvider (so the REAL
  * callModel chokepoint runs without a vendor SDK), a fake SourcingProvider, an
  * emitEvent that captures into an array, and a runResearch stub. No DB, no real
  * model. Explicit vitest imports because the project runs with `globals: false`.
@@ -53,7 +53,7 @@ interface FakeAgentRun {
 }
 
 interface FakeCandidateRow {
-  campaignId: string;
+  prospectSearchId: string;
   name: string;
   domain: string | null;
   linkedinUrl: string | null;
@@ -92,8 +92,8 @@ function makeFakePrisma(opts?: {
   >;
 }) {
   const runs = new Map<string, FakeAgentRun>();
-  const candidates: FakeCandidateRow[] = [];
-  const campaignUpdates: Array<{ id: string; status: string }> = [];
+  const prospects: FakeCandidateRow[] = [];
+  const prospectSearchUpdates: Array<{ id: string; status: string }> = [];
   let runCounter = 0;
   let modelCallCounter = 0;
 
@@ -172,7 +172,7 @@ function makeFakePrisma(opts?: {
     contactListMember: {
       findMany: vi.fn(async () => opts?.winMembers ?? []),
     },
-    campaign: {
+    prospectSearch: {
       update: vi.fn(
         async ({
           where,
@@ -181,14 +181,14 @@ function makeFakePrisma(opts?: {
           where: { id: string };
           data: { status: string };
         }) => {
-          campaignUpdates.push({ id: where.id, status: data.status });
+          prospectSearchUpdates.push({ id: where.id, status: data.status });
           return { id: where.id, status: data.status };
         },
       ),
     },
-    campaignCandidate: {
+    prospect: {
       create: vi.fn(async ({ data }: { data: FakeCandidateRow }) => {
-        candidates.push({ ...data });
+        prospects.push({ ...data });
         return { ...data };
       }),
     },
@@ -201,15 +201,15 @@ function makeFakePrisma(opts?: {
     },
     // Test handles.
     _runs: runs,
-    _candidates: candidates,
-    _campaignUpdates: campaignUpdates,
+    _candidates: prospects,
+    _prospectSearchUpdates: prospectSearchUpdates,
   };
 
   return prisma as unknown as PrismaClient & {
     _runs: Map<string, FakeAgentRun>;
     _candidates: FakeCandidateRow[];
-    _campaignUpdates: Array<{ id: string; status: string }>;
-    campaign: { update: ReturnType<typeof vi.fn> };
+    _prospectSearchUpdates: Array<{ id: string; status: string }>;
+    prospectSearch: { update: ReturnType<typeof vi.fn> };
     agentRun: {
       create: ReturnType<typeof vi.fn>;
       update: ReturnType<typeof vi.fn>;
@@ -257,7 +257,7 @@ function icpJson(): string {
   });
 }
 
-function candidate(name: string, domain: string | null = null): CandidateCompany {
+function prospect(name: string, domain: string | null = null): CandidateCompany {
   return {
     name,
     domain,
@@ -306,26 +306,26 @@ function makeRunResearch(
 
 const SCORE_JSON = JSON.stringify({ fitScore: 0.8, rationale: 'Strong match.' });
 
-describe('CampaignOrchestrator', () => {
-  let events: CampaignEvent[];
-  let emitEvent: (e: CampaignEvent) => void;
+describe('ProspectSearchOrchestrator', () => {
+  let events: ProspectSearchEvent[];
+  let emitEvent: (e: ProspectSearchEvent) => void;
 
   beforeEach(() => {
     events = [];
-    emitEvent = (e: CampaignEvent) => events.push(e);
+    emitEvent = (e: ProspectSearchEvent) => events.push(e);
   });
 
   const types = (): string[] => events.map((e) => e.type);
 
   describe('run() with no source attached (optional sourcing)', () => {
-    it('derives the ICP, completes with 0 candidates, and prompts for a source', async () => {
+    it('derives the ICP, completes with 0 prospects, and prompts for a source', async () => {
       const prisma = makeFakePrisma();
       const llm = makeFakeLlm((i) => {
         if (i === 0) return { text: icpJson() };
         throw new Error('no scoring call should happen without a source');
       });
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         // No source attached.
@@ -335,7 +335,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       const result = await orchestrator.run({
-        campaignId: 'camp-1',
+        prospectSearchId: 'camp-1',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'Find lookalikes',
@@ -345,23 +345,23 @@ describe('CampaignOrchestrator', () => {
 
       expect(result).toEqual({
         status: 'completed',
-        candidateCount: 0,
+        prospectCount: 0,
         costCents: 0,
       });
-      // ICP is still derived + shown; no sourcing_started / candidate_qualified.
+      // ICP is still derived + shown; no sourcing_started / prospect_qualified.
       expect(types()).toEqual([
-        'campaign_started',
+        'search_started',
         'icp_derived',
         'sourcing_completed',
-        'campaign_completed',
+        'search_completed',
       ]);
       const sourcing = events.find((e) => e.type === 'sourcing_completed');
       expect(sourcing).toBeDefined();
       if (sourcing?.type === 'sourcing_completed') {
-        expect(sourcing.data.candidateCount).toBe(0);
-        expect(sourcing.data.summary).toMatch(/no candidate source/i);
+        expect(sourcing.data.prospectCount).toBe(0);
+        expect(sourcing.data.summary).toMatch(/no prospect source/i);
       }
-      expect(prisma._campaignUpdates).toContainEqual({
+      expect(prisma._prospectSearchUpdates).toContainEqual({
         id: 'camp-1',
         status: 'completed',
       });
@@ -391,7 +391,7 @@ describe('CampaignOrchestrator', () => {
           },
         },
       });
-      // ICP call (index 0), then a scoring call per candidate.
+      // ICP call (index 0), then a scoring call per prospect.
       const scores = [
         JSON.stringify({ fitScore: 0.3, rationale: 'weak' }),
         JSON.stringify({ fitScore: 0.9, rationale: 'strong' }),
@@ -403,8 +403,8 @@ describe('CampaignOrchestrator', () => {
       });
 
       const provider = makeSourcingProvider([
-        candidate('Alpha', 'alpha.com'),
-        candidate('Beta', 'beta.com'),
+        prospect('Alpha', 'alpha.com'),
+        prospect('Beta', 'beta.com'),
       ]);
       const draftByTarget: Record<string, string> = {
         'Alpha (alpha.com)': 'draft-a',
@@ -414,7 +414,7 @@ describe('CampaignOrchestrator', () => {
         researchCompleted(draftByTarget[target] as string),
       );
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => provider,
@@ -423,7 +423,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       const result = await orchestrator.run({
-        campaignId: 'camp-1',
+        prospectSearchId: 'camp-1',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'Find lookalikes',
@@ -434,52 +434,52 @@ describe('CampaignOrchestrator', () => {
       });
 
       expect(result.status).toBe('completed');
-      expect(result.candidateCount).toBe(2);
+      expect(result.prospectCount).toBe(2);
 
       // Event ordering.
       expect(types()).toEqual([
-        'campaign_started',
+        'search_started',
         'icp_derived',
         'sourcing_started',
         'sourcing_completed',
-        'candidate_qualified',
-        'candidate_qualified',
-        'campaign_completed',
+        'prospect_qualified',
+        'prospect_qualified',
+        'search_completed',
       ]);
 
-      // Campaign row transitioned to completed.
-      expect(prisma._campaignUpdates).toContainEqual({
+      // ProspectSearch row transitioned to completed.
+      expect(prisma._prospectSearchUpdates).toContainEqual({
         id: 'camp-1',
         status: 'completed',
       });
 
-      // candidate_qualified events carry the right candidates (claims joined for
+      // prospect_qualified events carry the right prospects (claims joined for
       // the one with a draft).
-      const qualified = events.filter((e) => e.type === 'candidate_qualified');
+      const qualified = events.filter((e) => e.type === 'prospect_qualified');
       const alpha = qualified.find(
         (e) =>
-          e.type === 'candidate_qualified' && e.data.candidate.name === 'Alpha',
+          e.type === 'prospect_qualified' && e.data.prospect.name === 'Alpha',
       );
-      expect(alpha && alpha.type === 'candidate_qualified').toBe(true);
-      if (alpha && alpha.type === 'candidate_qualified') {
-        expect(alpha.data.candidate.claims).toHaveLength(1);
-        expect(alpha.data.candidate.claims[0]?.citationUrl).toBe(
+      expect(alpha && alpha.type === 'prospect_qualified').toBe(true);
+      if (alpha && alpha.type === 'prospect_qualified') {
+        expect(alpha.data.prospect.claims).toHaveLength(1);
+        expect(alpha.data.prospect.claims[0]?.citationUrl).toBe(
           'https://a.example',
         );
       }
     });
 
-    it('ranks completed campaign result by fitScore (the campaign_completed count == candidates)', async () => {
+    it('ranks completed prospectSearch result by fitScore (the search_completed count == prospects)', async () => {
       const prisma = makeFakePrisma({
         drafts: { 'd1': { content: {}, claims: [] } },
       });
       const llm = makeFakeLlm((i) =>
         i === 0 ? { text: icpJson() } : { text: SCORE_JSON },
       );
-      const provider = makeSourcingProvider([candidate('Solo')]);
+      const provider = makeSourcingProvider([prospect('Solo')]);
       const research = makeRunResearch(() => researchCompleted('d1'));
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => provider,
@@ -488,7 +488,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       const result = await orchestrator.run({
-        campaignId: 'camp-2',
+        prospectSearchId: 'camp-2',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'g',
@@ -496,10 +496,10 @@ describe('CampaignOrchestrator', () => {
         budgetCents: 1000,
       });
 
-      const completed = events.find((e) => e.type === 'campaign_completed');
-      expect(completed?.type).toBe('campaign_completed');
-      if (completed?.type === 'campaign_completed') {
-        expect(completed.data.candidateCount).toBe(1);
+      const completed = events.find((e) => e.type === 'search_completed');
+      expect(completed?.type).toBe('search_completed');
+      if (completed?.type === 'search_completed') {
+        expect(completed.data.prospectCount).toBe(1);
       }
       expect(result.status).toBe('completed');
     });
@@ -514,10 +514,10 @@ describe('CampaignOrchestrator', () => {
       const llm = makeFakeLlm((i) =>
         i === 0 ? { text: icpJson() } : { text: SCORE_JSON },
       );
-      const provider = makeSourcingProvider([candidate('Cand')]);
+      const provider = makeSourcingProvider([prospect('Cand')]);
       const research = makeRunResearch(() => researchCompleted('d1'));
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => provider,
@@ -526,7 +526,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       await orchestrator.run({
-        campaignId: 'camp-3',
+        prospectSearchId: 'camp-3',
         orgId: 'org-9',
         triggeredBy: 'user-1',
         goal: 'g',
@@ -548,10 +548,10 @@ describe('CampaignOrchestrator', () => {
       const llm = makeFakeLlm((i) =>
         i === 0 ? { text: icpJson() } : { text: SCORE_JSON },
       );
-      const provider = makeSourcingProvider([candidate('Cand')]);
+      const provider = makeSourcingProvider([prospect('Cand')]);
       const research = makeRunResearch(() => researchCompleted('d1'));
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => provider,
@@ -560,7 +560,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       await orchestrator.run({
-        campaignId: 'camp-4',
+        prospectSearchId: 'camp-4',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'g',
@@ -571,23 +571,23 @@ describe('CampaignOrchestrator', () => {
       // The ICP run was created with the orchestrator teammate + phase marker,
       // then finalized with the icp summary stashed in inputContext.
       const icpRun = [...prisma._runs.values()].find(
-        (r) => r.teammate === CAMPAIGN_TEAMMATE,
+        (r) => r.teammate === PROSPECT_SEARCH_TEAMMATE,
       );
       expect(icpRun).toBeDefined();
       expect(icpRun?.status).toBe('completed');
       const ctx = icpRun?.inputContext as Record<string, unknown>;
       expect(ctx.phase).toBe(ICP_PHASE);
-      expect(ctx.campaignId).toBe('camp-4');
+      expect(ctx.prospectSearchId).toBe('camp-4');
       expect((ctx.icp as { summary: string }).summary).toContain('B2B SaaS');
     });
   });
 
   describe('budget cap (invariant #8)', () => {
-    it('stops qualifying once the per-campaign cost cap is reached', async () => {
+    it('stops qualifying once the per-prospectSearch cost cap is reached', async () => {
       // Each model (ICP + scoring) call bills enough that after the first
-      // candidate's scoring call the running spend hits the cap. The cost
+      // prospect's scoring call the running spend hits the cap. The cost
       // billed comes from outputTokens via the real cost table; we read it back
-      // from the per-candidate AgentRun.costCents in qualifyAll's ledger.
+      // from the per-prospect AgentRun.costCents in qualifyAll's ledger.
       const prisma = makeFakePrisma({
         drafts: {
           'd1': { content: {}, claims: [] },
@@ -602,9 +602,9 @@ describe('CampaignOrchestrator', () => {
           : { text: SCORE_JSON, outputTokens: 200_000 },
       );
       const provider = makeSourcingProvider([
-        candidate('A'),
-        candidate('B'),
-        candidate('C'),
+        prospect('A'),
+        prospect('B'),
+        prospect('C'),
       ]);
       const draftFor: Record<string, string> = {
         A: 'd1',
@@ -615,7 +615,7 @@ describe('CampaignOrchestrator', () => {
         researchCompleted(draftFor[target] as string, 0),
       );
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => provider,
@@ -625,30 +625,30 @@ describe('CampaignOrchestrator', () => {
       });
 
       const result = await orchestrator.run({
-        campaignId: 'camp-budget',
+        prospectSearchId: 'camp-budget',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'g',
         winsListId: null,
         concurrency: 1,
-        budgetCents: 300, // one candidate's scoring call (300¢) hits the cap.
+        budgetCents: 300, // one prospect's scoring call (300¢) hits the cap.
       });
 
-      // Fewer outcomes than candidates: the cap stopped the pipeline.
-      const qualified = events.filter((e) => e.type === 'candidate_qualified');
+      // Fewer outcomes than prospects: the cap stopped the pipeline.
+      const qualified = events.filter((e) => e.type === 'prospect_qualified');
       expect(qualified.length).toBeLessThan(3);
-      expect(result.candidateCount).toBe(qualified.length);
+      expect(result.prospectCount).toBe(qualified.length);
       // Still completes (not failed).
       expect(result.status).toBe('completed');
-      expect(prisma._campaignUpdates).toContainEqual({
+      expect(prisma._prospectSearchUpdates).toContainEqual({
         id: 'camp-budget',
         status: 'completed',
       });
     });
 
-    it('clamps the per-candidate budget to the remaining campaign budget', async () => {
-      // budgetCents 30 is below the per-candidate default (50). The single
-      // candidate's research run must be invoked with the clamped budget (30),
+    it('clamps the per-prospect budget to the remaining prospectSearch budget', async () => {
+      // budgetCents 30 is below the per-prospect default (50). The single
+      // prospect's research run must be invoked with the clamped budget (30),
       // not the default 50.
       const prisma = makeFakePrisma({
         drafts: { 'd1': { content: {}, claims: [] } },
@@ -656,12 +656,12 @@ describe('CampaignOrchestrator', () => {
       const llm = makeFakeLlm((i) =>
         i === 0 ? { text: icpJson(), outputTokens: 1 } : { text: SCORE_JSON },
       );
-      const provider = makeSourcingProvider([candidate('Only')]);
+      const provider = makeSourcingProvider([prospect('Only')]);
       const research = vi.fn(async () =>
         researchCompleted('d1', 0),
       ) as unknown as typeof runResearch;
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => provider,
@@ -670,7 +670,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       await orchestrator.run({
-        campaignId: 'camp-clamp',
+        prospectSearchId: 'camp-clamp',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'g',
@@ -686,7 +686,7 @@ describe('CampaignOrchestrator', () => {
   });
 
   describe('fail-soft', () => {
-    it('does not throw when ICP derivation fails; emits campaign_failed + sets status=failed', async () => {
+    it('does not throw when ICP derivation fails; emits search_failed + sets status=failed', async () => {
       const prisma = makeFakePrisma();
       // The createMessage rejects → callModel throws → deriveIcp rethrows.
       const llm: LlmProvider = {
@@ -696,9 +696,9 @@ describe('CampaignOrchestrator', () => {
           throw new Error('model exploded');
         }),
       };
-      const provider = makeSourcingProvider([candidate('X')]);
+      const provider = makeSourcingProvider([prospect('X')]);
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => provider,
@@ -707,7 +707,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       const result = await orchestrator.run({
-        campaignId: 'camp-fail',
+        prospectSearchId: 'camp-fail',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'g',
@@ -717,15 +717,15 @@ describe('CampaignOrchestrator', () => {
 
       expect(result).toEqual({
         status: 'failed',
-        candidateCount: 0,
+        prospectCount: 0,
         costCents: 0,
       });
-      expect(types()).toEqual(['campaign_started', 'campaign_failed']);
-      const failed = events.find((e) => e.type === 'campaign_failed');
-      if (failed?.type === 'campaign_failed') {
+      expect(types()).toEqual(['search_started', 'search_failed']);
+      const failed = events.find((e) => e.type === 'search_failed');
+      if (failed?.type === 'search_failed') {
         expect(failed.data.message).toContain('model exploded');
       }
-      expect(prisma._campaignUpdates).toContainEqual({
+      expect(prisma._prospectSearchUpdates).toContainEqual({
         id: 'camp-fail',
         status: 'failed',
       });
@@ -737,7 +737,7 @@ describe('CampaignOrchestrator', () => {
       const prisma = makeFakePrisma();
       const llm = makeFakeLlm(() => ({ text: icpJson() }));
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => {
@@ -748,7 +748,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       const result = await orchestrator.run({
-        campaignId: 'camp-src-fail',
+        prospectSearchId: 'camp-src-fail',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'g',
@@ -759,9 +759,9 @@ describe('CampaignOrchestrator', () => {
       expect(result.status).toBe('failed');
       // ICP derived first, then the failure on sourcing.
       expect(types()).toEqual([
-        'campaign_started',
+        'search_started',
         'icp_derived',
-        'campaign_failed',
+        'search_failed',
       ]);
     });
 
@@ -769,7 +769,7 @@ describe('CampaignOrchestrator', () => {
       const prisma = makeFakePrisma();
       const llm = makeFakeLlm(() => ({ text: icpJson() }));
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => {
@@ -780,7 +780,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       const result = await orchestrator.run({
-        campaignId: 'camp-src-unavailable',
+        prospectSearchId: 'camp-src-unavailable',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'g',
@@ -788,14 +788,14 @@ describe('CampaignOrchestrator', () => {
         budgetCents: 1000,
       });
 
-      // User-fixable → completed with zero candidates, not failed.
+      // User-fixable → completed with zero prospects, not failed.
       expect(result.status).toBe('completed');
-      expect(result.candidateCount).toBe(0);
+      expect(result.prospectCount).toBe(0);
       expect(types()).toEqual([
-        'campaign_started',
+        'search_started',
         'icp_derived',
         'sourcing_completed',
-        'campaign_completed',
+        'search_completed',
       ]);
     });
 
@@ -809,7 +809,7 @@ describe('CampaignOrchestrator', () => {
         }),
       };
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => makeSourcingProvider([]),
@@ -818,7 +818,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       await orchestrator.run({
-        campaignId: 'camp-icp-run',
+        prospectSearchId: 'camp-icp-run',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'g',
@@ -827,7 +827,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       const icpRun = [...prisma._runs.values()].find(
-        (r) => r.teammate === CAMPAIGN_TEAMMATE,
+        (r) => r.teammate === PROSPECT_SEARCH_TEAMMATE,
       );
       expect(icpRun?.status).toBe('failed');
       expect(icpRun?.completedAt).not.toBeNull();
@@ -835,14 +835,14 @@ describe('CampaignOrchestrator', () => {
   });
 
   describe('tool_activity forwarding', () => {
-    it("wraps the Researcher's emitted RunEvent as a campaign tool_activity event", async () => {
+    it("wraps the Researcher's emitted RunEvent as a prospectSearch tool_activity event", async () => {
       const prisma = makeFakePrisma({
         drafts: { 'd1': { content: {}, claims: [] } },
       });
       const llm = makeFakeLlm((i) =>
         i === 0 ? { text: icpJson() } : { text: SCORE_JSON },
       );
-      const provider = makeSourcingProvider([candidate('A')]);
+      const provider = makeSourcingProvider([prospect('A')]);
       const innerEvent: RunEvent = {
         type: 'tool_call_started',
         runId: 'run-x',
@@ -854,7 +854,7 @@ describe('CampaignOrchestrator', () => {
         innerEvent,
       );
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => provider,
@@ -863,7 +863,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       await orchestrator.run({
-        campaignId: 'camp-tool',
+        prospectSearchId: 'camp-tool',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'g',
@@ -875,17 +875,17 @@ describe('CampaignOrchestrator', () => {
       const toolActivity = events.find((e) => e.type === 'tool_activity');
       expect(toolActivity).toBeDefined();
       if (toolActivity?.type === 'tool_activity') {
-        expect(toolActivity.campaignId).toBe('camp-tool');
+        expect(toolActivity.prospectSearchId).toBe('camp-tool');
         expect(toolActivity.data.event).toEqual(innerEvent);
       }
     });
   });
 
-  describe('abstain / failed candidate is still persisted', () => {
-    it('persists a candidate with fitScore 0 + rationale when the Researcher abstains (no draft)', async () => {
+  describe('abstain / failed prospect is still persisted', () => {
+    it('persists a prospect with fitScore 0 + rationale when the Researcher abstains (no draft)', async () => {
       const prisma = makeFakePrisma();
       const llm = makeFakeLlm(() => ({ text: icpJson() }));
-      const provider = makeSourcingProvider([candidate('Ghost')]);
+      const provider = makeSourcingProvider([prospect('Ghost')]);
       const research = vi.fn(async () => ({
         runId: 'r',
         status: 'abstained' as const,
@@ -894,7 +894,7 @@ describe('CampaignOrchestrator', () => {
         toolCallCount: 0,
       })) as unknown as typeof runResearch;
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => provider,
@@ -903,7 +903,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       const result = await orchestrator.run({
-        campaignId: 'camp-abstain',
+        prospectSearchId: 'camp-abstain',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'g',
@@ -913,7 +913,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       expect(result.status).toBe('completed');
-      expect(result.candidateCount).toBe(1);
+      expect(result.prospectCount).toBe(1);
       expect(prisma._candidates).toHaveLength(1);
       const row = prisma._candidates[0];
       expect(row?.fitScore).toBe(0);
@@ -922,15 +922,15 @@ describe('CampaignOrchestrator', () => {
       expect(row?.draftId).toBeNull();
     });
 
-    it('persists a candidate with fitScore 0 when the Researcher run throws', async () => {
+    it('persists a prospect with fitScore 0 when the Researcher run throws', async () => {
       const prisma = makeFakePrisma();
       const llm = makeFakeLlm(() => ({ text: icpJson() }));
-      const provider = makeSourcingProvider([candidate('Boom')]);
+      const provider = makeSourcingProvider([prospect('Boom')]);
       const research = vi.fn(async () => {
         throw new Error('network down');
       }) as unknown as typeof runResearch;
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => provider,
@@ -939,7 +939,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       const result = await orchestrator.run({
-        campaignId: 'camp-throw',
+        prospectSearchId: 'camp-throw',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'g',
@@ -959,17 +959,17 @@ describe('CampaignOrchestrator', () => {
       const prisma = makeFakePrisma({
         drafts: { 'd1': { content: { brief: 'x' }, claims: [] } },
       });
-      // ICP call cheap; scoring call bills way over the per-candidate clamp so
+      // ICP call cheap; scoring call bills way over the per-prospect clamp so
       // callModel throws BudgetExceededError, which scoreCandidate catches.
       const llm = makeFakeLlm((i) =>
         i === 0
           ? { text: icpJson(), outputTokens: 1 }
           : { text: SCORE_JSON, outputTokens: 10_000_000 },
       );
-      const provider = makeSourcingProvider([candidate('Pricey')]);
+      const provider = makeSourcingProvider([prospect('Pricey')]);
       const research = makeRunResearch(() => researchCompleted('d1', 0));
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => provider,
@@ -978,33 +978,33 @@ describe('CampaignOrchestrator', () => {
       });
 
       const result = await orchestrator.run({
-        campaignId: 'camp-score-budget',
+        prospectSearchId: 'camp-score-budget',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'g',
         winsListId: null,
         concurrency: 1,
-        budgetCents: 10_000, // campaign budget high; per-candidate clamp is 50.
+        budgetCents: 10_000, // prospectSearch budget high; per-prospect clamp is 50.
       });
 
-      // Did not crash the campaign; candidate persisted with the budget reason.
+      // Did not crash the prospectSearch; prospect persisted with the budget reason.
       expect(result.status).toBe('completed');
       expect(prisma._candidates).toHaveLength(1);
       expect(prisma._candidates[0]?.fitScore).toBe(0);
       expect(prisma._candidates[0]?.rationale).toContain(
-        'per-candidate budget exhausted',
+        'per-prospect budget exhausted',
       );
     });
   });
 
   describe('scoring rethrow', () => {
-    it('fails the campaign soft when the scoring call throws a non-budget error', async () => {
+    it('fails the prospectSearch soft when the scoring call throws a non-budget error', async () => {
       const prisma = makeFakePrisma({
         drafts: { 'd1': { content: { brief: 'x' }, claims: [] } },
       });
       // ICP call (i=0) succeeds; scoring call (i=1) throws a non-budget error
       // from createMessage → callModel rethrows → scoreCandidate rethrows
-      // (line 586) → qualifyOne → run()'s catch → campaign_failed.
+      // (line 586) → qualifyOne → run()'s catch → search_failed.
       let n = 0;
       const llm: LlmProvider = {
         name: 'fake',
@@ -1021,10 +1021,10 @@ describe('CampaignOrchestrator', () => {
           throw new Error('scoring transport error');
         }),
       };
-      const provider = makeSourcingProvider([candidate('A')]);
+      const provider = makeSourcingProvider([prospect('A')]);
       const research = makeRunResearch(() => researchCompleted('d1', 0));
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => provider,
@@ -1033,7 +1033,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       const result = await orchestrator.run({
-        campaignId: 'camp-score-throw',
+        prospectSearchId: 'camp-score-throw',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'g',
@@ -1043,9 +1043,9 @@ describe('CampaignOrchestrator', () => {
       });
 
       expect(result.status).toBe('failed');
-      expect(types()).toContain('campaign_failed');
-      const failed = events.find((e) => e.type === 'campaign_failed');
-      if (failed?.type === 'campaign_failed') {
+      expect(types()).toContain('search_failed');
+      const failed = events.find((e) => e.type === 'search_failed');
+      if (failed?.type === 'search_failed') {
         expect(failed.data.message).toContain('scoring transport error');
       }
     });
@@ -1069,10 +1069,10 @@ describe('CampaignOrchestrator', () => {
       const llm = makeFakeLlm((i) =>
         i === 0 ? { text: icpJson() } : { text: SCORE_JSON },
       );
-      const provider = makeSourcingProvider([candidate('Cand')]);
+      const provider = makeSourcingProvider([prospect('Cand')]);
       const research = makeRunResearch(() => researchCompleted('d1'));
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => provider,
@@ -1081,7 +1081,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       const result = await orchestrator.run({
-        campaignId: 'camp-wins-title',
+        prospectSearchId: 'camp-wins-title',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'g',
@@ -1110,10 +1110,10 @@ describe('CampaignOrchestrator', () => {
       const llm = makeFakeLlm((i) =>
         i === 0 ? { text: icpJson() } : { text: SCORE_JSON },
       );
-      const provider = makeSourcingProvider([candidate('A')]);
+      const provider = makeSourcingProvider([prospect('A')]);
       const research = makeRunResearch(() => researchCompleted('missing'));
 
-      const orchestrator = new CampaignOrchestrator({
+      const orchestrator = new ProspectSearchOrchestrator({
         prisma,
         llm,
         buildSourcingProvider: async () => provider,
@@ -1122,7 +1122,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       const result = await orchestrator.run({
-        campaignId: 'camp-nobrief',
+        prospectSearchId: 'camp-nobrief',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'g',
@@ -1132,7 +1132,7 @@ describe('CampaignOrchestrator', () => {
       });
 
       // Scoring still ran (the brief text was the unavailable sentinel), so the
-      // candidate carries the scored fitScore + the linked draftId.
+      // prospect carries the scored fitScore + the linked draftId.
       expect(result.status).toBe('completed');
       expect(prisma._candidates[0]?.draftId).toBe('missing');
       expect(prisma._candidates[0]?.fitScore).toBeGreaterThan(0);

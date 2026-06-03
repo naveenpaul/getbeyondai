@@ -1,13 +1,13 @@
 import { z } from 'zod';
 import type {
-  CampaignDetailResponse,
-  CampaignListResponse,
-  CreateCampaignRequest,
-  CreateCampaignResponse,
+  ProspectSearchDetailResponse,
+  ProspectSearchListResponse,
+  CreateProspectSearchRequest,
+  CreateProspectSearchResponse,
 } from '@getbeyond/shared';
 
 /**
- * POST /campaigns request body — Zod validator.
+ * POST /prospect-searches request body — Zod validator.
  *
  * The public *types* live in @getbeyond/shared so the web client + Chrome
  * extension + third-party clients import them without pulling in the API
@@ -23,20 +23,20 @@ const SourcingConfigSchema = z.discriminatedUnion('provider', [
   z.object({ provider: z.literal('apollo') }),
 ]);
 
-export const CreateCampaignRequestSchema = z.object({
+export const CreateProspectSearchRequestSchema = z.object({
   goal: z.string().min(1, 'goal is required'),
   title: z.string().min(1).optional(),
   winsListId: z.string().min(1).nullable().optional(),
-  // Optional: a campaign can start with just a goal (derives + shows the ICP,
-  // then prompts for a source). Attach a list to find candidates.
+  // Optional: a prospectSearch can start with just a goal (derives + shows the ICP,
+  // then prompts for a source). Attach a list to find prospects.
   sourcing: SourcingConfigSchema.nullable().optional(),
   budgetCents: z.number().int().min(1).max(100_000).optional(),
-}) satisfies z.ZodType<CreateCampaignRequest>;
+}) satisfies z.ZodType<CreateProspectSearchRequest>;
 
 // Re-export the public types so API call sites import them from the DTO module.
 export type {
-  CampaignDetailResponse,
-  CampaignListResponse,
-  CreateCampaignRequest,
-  CreateCampaignResponse,
+  ProspectSearchDetailResponse,
+  ProspectSearchListResponse,
+  CreateProspectSearchRequest,
+  CreateProspectSearchResponse,
 };

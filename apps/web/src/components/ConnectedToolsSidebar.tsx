@@ -4,21 +4,21 @@ import { Database, Globe, Search, Wrench } from 'lucide-react';
 import type { SourcingConfig } from '@getbeyond/shared';
 
 /**
- * Always-open right rail listing the tools + sources in play for a campaign
+ * Always-open right rail listing the tools + sources in play for a prospectSearch
  * — the Claude-web-shaped "connected tools" panel.
  *
- * The sourcing source is reflected from the campaign's own SourcingConfig; the
+ * The sourcing source is reflected from the prospectSearch's own SourcingConfig; the
  * runtime tools (web search, page fetch) are a sensible static-for-now list of
- * what the Researcher uses while qualifying candidates. The point is the
+ * what the Researcher uses while qualifying prospects. The point is the
  * persistent layout, not a live tool registry — when the backend exposes a
- * per-campaign tool manifest this list can bind to it.
+ * per-prospectSearch tool manifest this list can bind to it.
  *
  * Desktop: persistent column (the parent grid keeps it open). Mobile: the
- * parent collapses it below the chat (see the campaign page layout).
+ * parent collapses it below the chat (see the prospectSearch page layout).
  */
 
 interface ConnectedToolsSidebarProps {
-  /** The campaign's sourcing config, if known, to label the source row. */
+  /** The prospectSearch's sourcing config, if known, to label the source row. */
   sourcing?: SourcingConfig | null;
 }
 
@@ -33,7 +33,7 @@ function describeSource(sourcing?: SourcingConfig | null): ToolEntry {
     return {
       icon: Database,
       name: 'Imported contact list',
-      detail: `Candidate pool · list ${sourcing.listId}`,
+      detail: `Prospect pool · list ${sourcing.listId}`,
     };
   }
   if (sourcing?.provider === 'apollo') {
@@ -75,7 +75,7 @@ export function ConnectedToolsSidebar({
           Connected tools
         </h2>
         <p className="mt-1 text-xs text-muted-foreground">
-          What this campaign can read from while it qualifies candidates.
+          What this prospectSearch can read from while it qualifies prospects.
         </p>
       </div>
 

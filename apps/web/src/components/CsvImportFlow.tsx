@@ -22,8 +22,8 @@ import {
  * Reusable CSV import flow: pick → preview + map → submit → poll → result.
  *
  * Extracted from the standalone /contacts/import page so it can also run
- * in-context (e.g. inside a modal launched from the campaign composer's
- * SourcePicker) without navigating away and losing the in-progress campaign.
+ * in-context (e.g. inside a modal launched from the prospectSearch composer's
+ * SourcePicker) without navigating away and losing the in-progress prospectSearch.
  *
  * The component owns the whole state machine but renders NO page chrome — the
  * caller supplies the surrounding Card / modal. On reaching a terminal state it

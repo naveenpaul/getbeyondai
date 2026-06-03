@@ -1,9 +1,9 @@
 import type { PrismaClient } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import type {
-  CampaignEvent,
+  ProspectSearchEvent,
   IcpSummary,
-  QualifiedCandidate,
+  QualifiedProspect,
   ResearcherDraftClaim,
   RunEvent,
 } from '@getbeyond/shared';
@@ -28,67 +28,67 @@ import {
 } from '../connectors/sourcing/waterfall-sourcing.service';
 import { upsertContact } from '../contacts/contact-upsert';
 import {
-  campaignCompleted,
-  campaignFailed,
-  campaignStarted,
-  candidateQualified,
+  searchCompleted,
+  searchFailed,
+  searchStarted,
+  prospectQualified,
   icpDerived,
   sourcingCompleted,
   sourcingStarted,
   toolActivity,
-  type EmitCampaignEvent,
-} from './campaign-events';
+  type EmitProspectSearchEvent,
+} from './prospect-search-events';
 import {
   buildCandidateScoringUserPrompt,
   buildIcpDerivationUserPrompt,
   CANDIDATE_SCORING_SYSTEM_PROMPT,
   ICP_DERIVATION_SYSTEM_PROMPT,
   type WinExample,
-} from './campaign.prompts';
+} from './prospect-search.prompts';
 
 /**
- * Campaign orchestrator — a FIXED GTM pipeline (NOT a generic planner).
+ * ProspectSearch orchestrator — a FIXED GTM pipeline (NOT a generic planner).
  *
  *   1. deriveIcp(winsListId, goal): read the wins ContactList (scoped to org),
  *      synthesize an ICP via callModel. → icp_derived
  *   2. source: ContactListSourcingProvider.findCandidates(icp). →
  *      sourcing_started / sourcing_completed
- *   3. qualify + rank: for each candidate, with bounded concurrency AND the
- *      per-campaign cost budget (invariant #8), run the Researcher to produce a
+ *   3. qualify + rank: for each prospect, with bounded concurrency AND the
+ *      per-prospectSearch cost budget (invariant #8), run the Researcher to produce a
  *      cited brief Draft, then score fit (0..1) + rationale via callModel.
- *      Persist a CampaignCandidate. → candidate_qualified per candidate, and
+ *      Persist a Prospect. → prospect_qualified per prospect, and
  *      each underlying Researcher RunEvent forwarded as tool_activity.
- *   4. rank by fitScore; set Campaign.status; → campaign_completed / failed.
+ *   4. rank by fitScore; set ProspectSearch.status; → search_completed / failed.
  *
  * Reuse, not reimplementation: research is the existing Researcher
  * (`runResearch` → runtime tool-use loop). The orchestrator mints an AgentRun
- * per candidate, drives the Researcher on it, then reuses that same AgentRun for
+ * per prospect, drives the Researcher on it, then reuses that same AgentRun for
  * the scoring `callModel` call so all cost lands on one auditable run. Both the
- * Researcher's spend and the scoring spend count against the per-campaign budget.
+ * Researcher's spend and the scoring spend count against the per-prospectSearch budget.
  *
  * Invariants honored:
  *   #1/#2 — the orchestrator reads ContactList rows for the wins seed and writes
- *           CampaignCandidate rows; the teammate (Researcher) itself touches only
+ *           Prospect rows; the teammate (Researcher) itself touches only
  *           the runtime. Sourcing stays behind the SourcingProvider interface.
  *   #3    — every LLM call (ICP derivation, scoring, and the Researcher's own
  *           turns) goes through callModel.
  *   #4    — claims are read back from the Researcher's persisted Draft, where the
  *           runtime has already enforced cite-or-abstain.
- *   #8    — a hard per-campaign budget cap: before each candidate we check the
- *           cumulative cost; a candidate whose Researcher run trips the per-run
- *           budget contributes nothing further, and once the campaign-wide cap is
- *           reached the pipeline stops qualifying more candidates.
+ *   #8    — a hard per-prospectSearch budget cap: before each prospect we check the
+ *           cumulative cost; a prospect whose Researcher run trips the per-run
+ *           budget contributes nothing further, and once the prospectSearch-wide cap is
+ *           reached the pipeline stops qualifying more prospects.
  */
 
 /** Default tuning. Production callers stick with these. */
-export const CAMPAIGN_DEFAULTS = {
+export const PROSPECT_SEARCH_DEFAULTS = {
   /** Candidate pool cap — how many companies to qualify. */
   candidateLimit: 25,
-  /** Per-campaign hard cost cap (cents). Sum across all candidate runs. */
+  /** Per-prospectSearch hard cost cap (cents). Sum across all prospect runs. */
   budgetCents: 500,
-  /** Per-candidate Researcher budget (cents). */
+  /** Per-prospect Researcher budget (cents). */
   perCandidateBudgetCents: 50,
-  /** How many candidates the Researcher qualifies concurrently. */
+  /** How many prospects the Researcher qualifies concurrently. */
   concurrency: 3,
   /** Model for ICP derivation + fit scoring. */
   modelName: 'claude-sonnet-4-6',
@@ -106,16 +106,16 @@ export const CONTACT_SOURCING_DEFAULTS = {
   threshold: 'verified' as const,
 } as const;
 
-/** A ranked candidate slimmed to what Stage 5 target-selection needs. */
+/** A ranked prospect slimmed to what Stage 5 target-selection needs. */
 export interface ContactTargetInput {
-  candidateId: string;
+  prospectId: string;
   name: string;
   domain: string | null;
   fitScore: number;
 }
 
 /**
- * Pure Stage 5 gate: from ranked candidates, pick the companies to pull contacts
+ * Pure Stage 5 gate: from ranked prospects, pick the companies to pull contacts
  * for — only QUALIFIED (fitScore > 0) companies that have a domain, capped to the
  * top `limit` (the input is already fit-ranked). Pulling contacts burns connector
  * credits, so this is where cost is bounded (eng-review A2). Carries the company
@@ -124,19 +124,19 @@ export interface ContactTargetInput {
 export function selectContactTargets(
   ranked: ReadonlyArray<ContactTargetInput>,
   limit: number,
-): Array<{ candidateId: string; name: string; domain: string }> {
-  const out: Array<{ candidateId: string; name: string; domain: string }> = [];
+): Array<{ prospectId: string; name: string; domain: string }> {
+  const out: Array<{ prospectId: string; name: string; domain: string }> = [];
   for (const r of ranked) {
     if (out.length >= limit) break;
     if (r.fitScore > 0 && r.domain) {
-      out.push({ candidateId: r.candidateId, name: r.name, domain: r.domain });
+      out.push({ prospectId: r.prospectId, name: r.name, domain: r.domain });
     }
   }
   return out;
 }
 
-export interface OrchestrateCampaignInput {
-  campaignId: string;
+export interface OrchestrateProspectSearchInput {
+  prospectSearchId: string;
   orgId: string;
   /** userId or 'system' — passed to the Researcher as triggeredBy. */
   triggeredBy: string;
@@ -147,15 +147,15 @@ export interface OrchestrateCampaignInput {
   budgetCents?: number;
   candidateLimit?: number;
   concurrency?: number;
-  /** Resolved model (P5); defaults to the campaign default when absent. */
+  /** Resolved model (P5); defaults to the prospectSearch default when absent. */
   modelName?: string;
 }
 
-export interface CampaignOrchestratorDeps {
+export interface ProspectSearchOrchestratorDeps {
   prisma: PrismaClient;
   llm: LlmProvider;
   /**
-   * Builds the per-run SourcingProvider for this campaign. The worker wires the
+   * Builds the per-run SourcingProvider for this prospectSearch. The worker wires the
    * concrete provider (ContactList or Apollo); tests pass a fake. Async because
    * Apollo discovery loads + decrypts the connector credentials. Throws
    * `SourcingUnavailableError` for benign, user-fixable problems (Apollo not
@@ -166,15 +166,15 @@ export interface CampaignOrchestratorDeps {
    * Builds the ordered enrichment connectors for Stage 5 (contact sourcing).
    * The worker loads the org's connected Snov/ZoomInfo accounts with decrypted
    * creds + breaker hooks, in priority order; tests inject fakes. **Optional** —
-   * when absent (or it returns no connectors) Stage 5 is a no-op, so a campaign
+   * when absent (or it returns no connectors) Stage 5 is a no-op, so a prospectSearch
    * with no enrichment connectors behaves exactly as before (regression-safe).
    */
   buildContactSourcers?: (orgId: string) => Promise<WaterfallConnector[]>;
   /**
-   * Forwards a campaign event onto the bus. The worker wires this to the
+   * Forwards a prospectSearch event onto the bus. The worker wires this to the
    * RunEventBus; tests capture into an array.
    */
-  emitEvent: EmitCampaignEvent;
+  emitEvent: EmitProspectSearchEvent;
   /**
    * Researcher entrypoint. Defaults to the real `runResearch`; tests inject a
    * stub so they don't drive the whole tool-use loop. Keeping it injectable is
@@ -184,9 +184,9 @@ export interface CampaignOrchestratorDeps {
   runResearch?: typeof runResearch;
 }
 
-export interface OrchestrateCampaignResult {
+export interface OrchestrateProspectSearchResult {
   status: 'completed' | 'failed';
-  candidateCount: number;
+  prospectCount: number;
   costCents: number;
 }
 
@@ -196,66 +196,66 @@ interface DerivedIcp {
 }
 
 interface QualifiedOutcome {
-  candidate: QualifiedCandidate;
-  /** CampaignCandidate.id — Stage 5 links sourced contacts to it. */
-  candidateId: string;
+  prospect: QualifiedProspect;
+  /** Prospect.id — Stage 5 links sourced contacts to it. */
+  prospectId: string;
   /** Company domain (may be null) — the waterfall's input for Stage 5. */
   domain: string | null;
   costCents: number;
 }
 
-export class CampaignOrchestrator {
-  private readonly deps: CampaignOrchestratorDeps;
+export class ProspectSearchOrchestrator {
+  private readonly deps: ProspectSearchOrchestratorDeps;
   // Resolved model for this run (set at run() start). Safe as instance state:
   // the orchestrator is constructed per-run, run() is called once, and every
-  // candidate in a run uses the same model.
-  private modelName: string = CAMPAIGN_DEFAULTS.modelName;
+  // prospect in a run uses the same model.
+  private modelName: string = PROSPECT_SEARCH_DEFAULTS.modelName;
 
-  constructor(deps: CampaignOrchestratorDeps) {
+  constructor(deps: ProspectSearchOrchestratorDeps) {
     this.deps = deps;
   }
 
   /**
-   * Drive a campaign from `running` to a terminal state. Emits the pipeline
+   * Drive a prospectSearch from `running` to a terminal state. Emits the pipeline
    * events as it goes. Never throws for expected failure modes (sourcing
-   * config, budget, LLM/research errors) — it records `campaign_failed` and
-   * sets Campaign.status='failed'. It re-throws only on truly unexpected DB
+   * config, budget, LLM/research errors) — it records `search_failed` and
+   * sets ProspectSearch.status='failed'. It re-throws only on truly unexpected DB
    * errors so the worker's pg-boss retry can engage.
    */
   async run(
-    input: OrchestrateCampaignInput,
-  ): Promise<OrchestrateCampaignResult> {
-    const { campaignId } = input;
-    const budgetCents = input.budgetCents ?? CAMPAIGN_DEFAULTS.budgetCents;
+    input: OrchestrateProspectSearchInput,
+  ): Promise<OrchestrateProspectSearchResult> {
+    const { prospectSearchId } = input;
+    const budgetCents = input.budgetCents ?? PROSPECT_SEARCH_DEFAULTS.budgetCents;
     const candidateLimit =
-      input.candidateLimit ?? CAMPAIGN_DEFAULTS.candidateLimit;
-    const concurrency = input.concurrency ?? CAMPAIGN_DEFAULTS.concurrency;
-    this.modelName = input.modelName ?? CAMPAIGN_DEFAULTS.modelName;
+      input.candidateLimit ?? PROSPECT_SEARCH_DEFAULTS.candidateLimit;
+    const concurrency = input.concurrency ?? PROSPECT_SEARCH_DEFAULTS.concurrency;
+    this.modelName = input.modelName ?? PROSPECT_SEARCH_DEFAULTS.modelName;
 
-    this.deps.emitEvent(campaignStarted(campaignId, input.goal));
+    this.deps.emitEvent(searchStarted(prospectSearchId, input.goal));
 
     try {
       // ── 1. Derive ICP ───────────────────────────────────────────────
       const derived = await this.deriveIcp(
-        campaignId,
+        prospectSearchId,
         input.orgId,
         input.triggeredBy,
         input.goal,
         input.winsListId,
       );
-      this.deps.emitEvent(icpDerived(campaignId, derived.summary));
+      this.deps.emitEvent(icpDerived(prospectSearchId, derived.summary));
 
-      // ── 2. Source candidate pool (optional) ─────────────────────────
+      // ── 2. Source prospect pool (optional) ─────────────────────────
       let provider: SourcingProvider | null;
       try {
         provider = await this.deps.buildSourcingProvider(input.orgId);
       } catch (err) {
         // A benign, user-fixable sourcing problem (Apollo not connected / key
         // rejected) — surface the actionable message and complete gracefully
-        // instead of failing the campaign. Anything else bubbles to the outer
-        // catch → campaign_failed (so pg-boss can retry real faults).
+        // instead of failing the prospectSearch. Anything else bubbles to the outer
+        // catch → search_failed (so pg-boss can retry real faults).
         if (err instanceof SourcingUnavailableError) {
-          return await this.completeWithoutSource(campaignId, err.userMessage);
+          return await this.completeWithoutSource(prospectSearchId, err.userMessage);
         }
         throw err;
       }
@@ -263,16 +263,16 @@ export class CampaignOrchestrator {
         // No source attached: the ICP is derived + shown, but there's no pool
         // to qualify. Complete gracefully and prompt the user to add a source.
         return await this.completeWithoutSource(
-          campaignId,
-          'No candidate source attached — connect Apollo to discover companies, or import a list.',
+          prospectSearchId,
+          'No prospect source attached — connect Apollo to discover companies, or import a list.',
         );
       }
-      this.deps.emitEvent(sourcingStarted(campaignId, provider.name));
+      this.deps.emitEvent(sourcingStarted(prospectSearchId, provider.name));
       const opts: FindCandidatesOptions = { limit: candidateLimit };
       const sourced = await provider.findCandidates(derived.icp, opts);
       this.deps.emitEvent(
         sourcingCompleted(
-          campaignId,
+          prospectSearchId,
           sourced.summary,
           sourced.candidates.length,
         ),
@@ -280,40 +280,40 @@ export class CampaignOrchestrator {
 
       // ── 3. Qualify + rank with bounded concurrency + budget cap ──────
       const outcomes = await this.qualifyAll({
-        campaignId,
+        prospectSearchId,
         orgId: input.orgId,
         triggeredBy: input.triggeredBy,
         icp: derived.icp,
-        candidates: sourced.candidates,
+        prospects: sourced.candidates,
         budgetCents,
         concurrency,
       });
 
       // ── 4. Rank, persist ordering, mark complete ────────────────────
       const ranked = [...outcomes].sort(
-        (a, b) => b.candidate.fitScore - a.candidate.fitScore,
+        (a, b) => b.prospect.fitScore - a.prospect.fitScore,
       );
       const costCents = outcomes.reduce((sum, o) => sum + o.costCents, 0);
 
       // ── 5. Source contacts at the top qualified companies (optional) ──
       // No-op unless the org has enrichment connectors wired; never fails the
-      // campaign (best-effort enrichment over already-ranked companies).
+      // prospectSearch (best-effort enrichment over already-ranked companies).
       await this.sourceContacts({
         ranked,
         orgId: input.orgId,
-        campaignId,
+        prospectSearchId,
       });
 
-      await this.deps.prisma.campaign.update({
-        where: { id: campaignId },
+      await this.deps.prisma.prospectSearch.update({
+        where: { id: prospectSearchId },
         data: { status: 'completed' },
       });
       this.deps.emitEvent(
-        campaignCompleted(campaignId, ranked.length, costCents),
+        searchCompleted(prospectSearchId, ranked.length, costCents),
       );
       return {
         status: 'completed',
-        candidateCount: ranked.length,
+        prospectCount: ranked.length,
         costCents,
       };
     } catch (err) {
@@ -321,46 +321,46 @@ export class CampaignOrchestrator {
       // Best-effort transition to failed. If THIS write also throws (DB down),
       // let it bubble so pg-boss retries the whole job — but still surface the
       // failure on the stream first so subscribers stop waiting.
-      this.deps.emitEvent(campaignFailed(campaignId, message));
-      await this.deps.prisma.campaign.update({
-        where: { id: campaignId },
+      this.deps.emitEvent(searchFailed(prospectSearchId, message));
+      await this.deps.prisma.prospectSearch.update({
+        where: { id: prospectSearchId },
         data: { status: 'failed' },
       });
-      return { status: 'failed', candidateCount: 0, costCents: 0 };
+      return { status: 'failed', prospectCount: 0, costCents: 0 };
     }
   }
 
   /**
-   * Graceful terminal for "ICP derived, but there's no usable candidate source"
+   * Graceful terminal for "ICP derived, but there's no usable prospect source"
    * — no source attached, or Apollo not connected / key rejected. Emits the
-   * actionable message on the stream and completes the campaign with zero
-   * candidates (not `failed`, since the user can fix it and re-run).
+   * actionable message on the stream and completes the prospectSearch with zero
+   * prospects (not `failed`, since the user can fix it and re-run).
    */
   private async completeWithoutSource(
-    campaignId: string,
+    prospectSearchId: string,
     message: string,
-  ): Promise<OrchestrateCampaignResult> {
-    this.deps.emitEvent(sourcingCompleted(campaignId, message, 0));
-    await this.deps.prisma.campaign.update({
-      where: { id: campaignId },
+  ): Promise<OrchestrateProspectSearchResult> {
+    this.deps.emitEvent(sourcingCompleted(prospectSearchId, message, 0));
+    await this.deps.prisma.prospectSearch.update({
+      where: { id: prospectSearchId },
       data: { status: 'completed' },
     });
-    this.deps.emitEvent(campaignCompleted(campaignId, 0, 0));
-    return { status: 'completed', candidateCount: 0, costCents: 0 };
+    this.deps.emitEvent(searchCompleted(prospectSearchId, 0, 0));
+    return { status: 'completed', prospectCount: 0, costCents: 0 };
   }
 
   /**
    * Stage 5 — source contacts at the top qualified companies via the connector
-   * waterfall, persisting each as a `Contact` linked to its `CampaignCandidate`.
+   * waterfall, persisting each as a `Contact` linked to its `Prospect`.
    *
    * Best-effort enrichment: a per-company or per-contact failure is logged-by-
-   * skip, never aborts the campaign. No-op when no enrichment connectors are
-   * wired — so a campaign without Snov/ZoomInfo behaves exactly as before.
+   * skip, never aborts the prospectSearch. No-op when no enrichment connectors are
+   * wired — so a prospectSearch without Snov/ZoomInfo behaves exactly as before.
    */
   private async sourceContacts(params: {
     ranked: QualifiedOutcome[];
     orgId: string;
-    campaignId: string;
+    prospectSearchId: string;
   }): Promise<void> {
     const build = this.deps.buildContactSourcers;
     if (!build) return;
@@ -369,10 +369,10 @@ export class CampaignOrchestrator {
 
     const targets = selectContactTargets(
       params.ranked.map((o) => ({
-        candidateId: o.candidateId,
-        name: o.candidate.name,
+        prospectId: o.prospectId,
+        name: o.prospect.name,
         domain: o.domain,
-        fitScore: o.candidate.fitScore,
+        fitScore: o.prospect.fitScore,
       })),
       CONTACT_SOURCING_DEFAULTS.companies,
     );
@@ -389,7 +389,7 @@ export class CampaignOrchestrator {
           },
         );
       } catch {
-        // A company-level sourcing failure must not sink the campaign — the
+        // A company-level sourcing failure must not sink the prospectSearch — the
         // companies are already ranked + persisted. Skip this company's contacts.
         continue;
       }
@@ -413,15 +413,15 @@ export class CampaignOrchestrator {
             rawPayload: s.contact.rawPayload as Prisma.InputJsonValue,
           });
           // Idempotent link (re-runs don't duplicate the join row).
-          await this.deps.prisma.campaignCandidateContact.upsert({
+          await this.deps.prisma.prospectContact.upsert({
             where: {
-              campaignCandidateId_contactId: {
-                campaignCandidateId: target.candidateId,
+              prospectId_contactId: {
+                prospectId: target.prospectId,
                 contactId: contact.id,
               },
             },
             create: {
-              campaignCandidateId: target.candidateId,
+              prospectId: target.prospectId,
               contactId: contact.id,
               sourceKind: s.sourceKind,
               emailVerification: s.contact.emailVerification ?? null,
@@ -444,7 +444,7 @@ export class CampaignOrchestrator {
    * goal alone.
    */
   private async deriveIcp(
-    campaignId: string,
+    prospectSearchId: string,
     orgId: string,
     triggeredBy: string,
     goal: string,
@@ -457,10 +457,10 @@ export class CampaignOrchestrator {
     const run = await this.deps.prisma.agentRun.create({
       data: {
         orgId,
-        teammate: CAMPAIGN_TEAMMATE,
+        teammate: PROSPECT_SEARCH_TEAMMATE,
         triggeredBy,
         status: 'running',
-        inputContext: { phase: ICP_PHASE, campaignId, goal, winsListId },
+        inputContext: { phase: ICP_PHASE, prospectSearchId, goal, winsListId },
       },
     });
 
@@ -481,13 +481,13 @@ export class CampaignOrchestrator {
             ],
           },
         ],
-        budgetCents: CAMPAIGN_DEFAULTS.budgetCents,
-        maxTokens: CAMPAIGN_DEFAULTS.maxTokens,
+        budgetCents: PROSPECT_SEARCH_DEFAULTS.budgetCents,
+        maxTokens: PROSPECT_SEARCH_DEFAULTS.maxTokens,
       });
       parsed = parseIcp(extractText(result.message.content));
     } catch (err) {
       // Mark the one-shot ICP run terminal even on failure so the stale-run
-      // reaper never touches it, then rethrow to fail the campaign.
+      // reaper never touches it, then rethrow to fail the prospectSearch.
       await this.deps.prisma.agentRun.update({
         where: { id: run.id },
         data: { status: 'failed', completedAt: new Date() },
@@ -511,9 +511,9 @@ export class CampaignOrchestrator {
     };
 
     // Persist the derived IcpSummary on the (now terminal) AgentRun's
-    // inputContext, tagged with campaignId. This is the read-back source for
-    // GET /campaigns/:id's `icp` field — the icp_derived stream event ages out
-    // of the bus buffer, but the campaign detail must show the ICP forever.
+    // inputContext, tagged with prospectSearchId. This is the read-back source for
+    // GET /prospect-searches/:id's `icp` field — the icp_derived stream event ages out
+    // of the bus buffer, but the prospectSearch detail must show the ICP forever.
     await this.deps.prisma.agentRun.update({
       where: { id: run.id },
       data: {
@@ -525,7 +525,7 @@ export class CampaignOrchestrator {
         // JSON. The values are plain JSON; the cast is sound.
         inputContext: {
           phase: ICP_PHASE,
-          campaignId,
+          prospectSearchId,
           goal,
           winsListId,
           icp: summary as unknown as Record<string, unknown>,
@@ -559,23 +559,23 @@ export class CampaignOrchestrator {
   }
 
   /**
-   * Qualify every candidate with bounded concurrency. A shared cost ledger
-   * enforces the per-campaign budget (invariant #8): before a worker starts a
-   * candidate it checks the running total; once the cap is reached, remaining
-   * candidates are skipped (not qualified). Each candidate's spend (Researcher +
+   * Qualify every prospect with bounded concurrency. A shared cost ledger
+   * enforces the per-prospectSearch budget (invariant #8): before a worker starts a
+   * prospect it checks the running total; once the cap is reached, remaining
+   * prospects are skipped (not qualified). Each prospect's spend (Researcher +
    * scoring) is added to the ledger as it completes.
    */
   private async qualifyAll(params: {
-    campaignId: string;
+    prospectSearchId: string;
     orgId: string;
     triggeredBy: string;
     icp: IcpCriteria;
-    candidates: CandidateCompany[];
+    prospects: CandidateCompany[];
     budgetCents: number;
     concurrency: number;
   }): Promise<QualifiedOutcome[]> {
-    const { candidates, budgetCents } = params;
-    const total = candidates.length;
+    const { prospects, budgetCents } = params;
+    const total = prospects.length;
     const outcomes: QualifiedOutcome[] = [];
     let spentCents = 0;
     let nextIndex = 0;
@@ -590,26 +590,26 @@ export class CampaignOrchestrator {
           budgetTripped = true;
           return;
         }
-        const candidate = candidates[index] as CandidateCompany;
+        const prospect = prospects[index] as CandidateCompany;
         const outcome = await this.qualifyOne({
-          campaignId: params.campaignId,
+          prospectSearchId: params.prospectSearchId,
           orgId: params.orgId,
           triggeredBy: params.triggeredBy,
           icp: params.icp,
-          candidate,
-          // The per-candidate run can't be allowed to overshoot the remaining
-          // campaign budget — clamp it to what's left.
+          prospect,
+          // The per-prospect run can't be allowed to overshoot the remaining
+          // prospectSearch budget — clamp it to what's left.
           budgetCents: Math.min(
-            CAMPAIGN_DEFAULTS.perCandidateBudgetCents,
+            PROSPECT_SEARCH_DEFAULTS.perCandidateBudgetCents,
             budgetCents - spentCents,
           ),
         });
         spentCents += outcome.costCents;
         outcomes.push(outcome);
         this.deps.emitEvent(
-          candidateQualified(
-            params.campaignId,
-            outcome.candidate,
+          prospectQualified(
+            params.prospectSearchId,
+            outcome.prospect,
             outcomes.length - 1,
             total,
           ),
@@ -624,29 +624,29 @@ export class CampaignOrchestrator {
   }
 
   /**
-   * Qualify a single candidate: run the Researcher on its company name/domain,
+   * Qualify a single prospect: run the Researcher on its company name/domain,
    * read back the cited brief, score fit via callModel (reusing the Researcher's
-   * AgentRun so cost is consolidated), and persist a CampaignCandidate.
+   * AgentRun so cost is consolidated), and persist a Prospect.
    *
-   * The Researcher's RunEvents are forwarded to the campaign stream as
-   * tool_activity. If the Researcher abstains/fails (no draft), the candidate
+   * The Researcher's RunEvents are forwarded to the prospectSearch stream as
+   * tool_activity. If the Researcher abstains/fails (no draft), the prospect
    * still gets persisted with fitScore 0 and a rationale explaining the gap —
    * so the chat shows it was looked at, not silently dropped.
    */
   private async qualifyOne(params: {
-    campaignId: string;
+    prospectSearchId: string;
     orgId: string;
     triggeredBy: string;
     icp: IcpCriteria;
-    candidate: CandidateCompany;
+    prospect: CandidateCompany;
     budgetCents: number;
   }): Promise<QualifiedOutcome> {
-    const { candidate } = params;
-    const target = candidate.domain
-      ? `${candidate.name} (${candidate.domain})`
-      : candidate.name;
+    const { prospect } = params;
+    const target = prospect.domain
+      ? `${prospect.name} (${prospect.domain})`
+      : prospect.name;
 
-    // Mint the candidate's AgentRun up front so the Researcher drives an
+    // Mint the prospect's AgentRun up front so the Researcher drives an
     // existing row (mirrors the Researcher controller's enqueue contract) and
     // the scoring callModel can reuse it.
     const run = await this.deps.prisma.agentRun.create({
@@ -657,7 +657,7 @@ export class CampaignOrchestrator {
         status: 'running',
         inputContext: {
           phase: 'qualify_candidate',
-          campaignId: params.campaignId,
+          prospectSearchId: params.prospectSearchId,
           target,
         },
       },
@@ -670,9 +670,9 @@ export class CampaignOrchestrator {
         {
           prisma: this.deps.prisma,
           llm: this.deps.llm,
-          // Forward the Researcher's granular RunEvents as campaign tool_activity.
+          // Forward the Researcher's granular RunEvents as prospectSearch tool_activity.
           emitEvent: (event: RunEvent) =>
-            this.deps.emitEvent(toolActivity(params.campaignId, event)),
+            this.deps.emitEvent(toolActivity(params.prospectSearchId, event)),
         },
         {
           runId: run.id,
@@ -684,13 +684,13 @@ export class CampaignOrchestrator {
         },
       );
     } catch (err) {
-      // A thrown Researcher error must not sink the whole campaign — record the
-      // candidate as unqualified-on-error and move on. The AgentRun is left for
+      // A thrown Researcher error must not sink the whole prospectSearch — record the
+      // prospect as unqualified-on-error and move on. The AgentRun is left for
       // the reaper to finalize.
       const message = err instanceof Error ? err.message : String(err);
       const persisted = await this.persistCandidate({
-        campaignId: params.campaignId,
-        candidate,
+        prospectSearchId: params.prospectSearchId,
+        prospect,
         fitScore: 0,
         rationale: `Research failed: ${message}`,
         draftId: null,
@@ -698,17 +698,17 @@ export class CampaignOrchestrator {
       });
       const costCents = await this.readRunCost(run.id);
       return {
-        candidate: persisted.candidate,
-        candidateId: persisted.candidateId,
-        domain: candidate.domain,
+        prospect: persisted.prospect,
+        prospectId: persisted.prospectId,
+        domain: prospect.domain,
         costCents,
       };
     }
 
     if (researchResult.status !== 'completed' || !researchResult.draftId) {
       const persisted = await this.persistCandidate({
-        campaignId: params.campaignId,
-        candidate,
+        prospectSearchId: params.prospectSearchId,
+        prospect,
         fitScore: 0,
         rationale: `No cited brief produced (${
           researchResult.reason ?? 'researcher abstained'
@@ -717,30 +717,30 @@ export class CampaignOrchestrator {
         claims: [],
       });
       return {
-        candidate: persisted.candidate,
-        candidateId: persisted.candidateId,
-        domain: candidate.domain,
+        prospect: persisted.prospect,
+        prospectId: persisted.prospectId,
+        domain: prospect.domain,
         costCents: researchResult.costCents,
       };
     }
 
     const { briefText, claims } = await this.readBrief(researchResult.draftId);
 
-    // Score fit, reusing the candidate's AgentRun (so the scoring spend lands on
-    // the same auditable run and counts toward the campaign budget). The run was
+    // Score fit, reusing the prospect's AgentRun (so the scoring spend lands on
+    // the same auditable run and counts toward the prospectSearch budget). The run was
     // marked terminal by the Researcher loop; flip it back to running for the
     // extra call, then re-finalize.
     const score = await this.scoreCandidate({
       runId: run.id,
       icp: params.icp,
-      candidateName: candidate.name,
+      candidateName: prospect.name,
       brief: briefText,
       budgetCents: params.budgetCents,
     });
 
     const persisted = await this.persistCandidate({
-      campaignId: params.campaignId,
-      candidate,
+      prospectSearchId: params.prospectSearchId,
+      prospect,
       fitScore: score.fitScore,
       rationale: score.rationale,
       draftId: researchResult.draftId,
@@ -748,9 +748,9 @@ export class CampaignOrchestrator {
     });
     const costCents = await this.readRunCost(run.id);
     return {
-      candidate: persisted.candidate,
-      candidateId: persisted.candidateId,
-      domain: candidate.domain,
+      prospect: persisted.prospect,
+      prospectId: persisted.prospectId,
+      domain: prospect.domain,
       costCents,
     };
   }
@@ -789,7 +789,7 @@ export class CampaignOrchestrator {
           },
         ],
         budgetCents: params.budgetCents,
-        maxTokens: CAMPAIGN_DEFAULTS.maxTokens,
+        maxTokens: PROSPECT_SEARCH_DEFAULTS.maxTokens,
       });
       return parseScore(extractText(result.message.content));
     } catch (err) {
@@ -798,7 +798,7 @@ export class CampaignOrchestrator {
         // record an honest low/zero score with the reason.
         return {
           fitScore: 0,
-          rationale: 'Scoring skipped: per-candidate budget exhausted.',
+          rationale: 'Scoring skipped: per-prospect budget exhausted.',
         };
       }
       throw err;
@@ -836,19 +836,19 @@ export class CampaignOrchestrator {
   }
 
   private async persistCandidate(params: {
-    campaignId: string;
-    candidate: CandidateCompany;
+    prospectSearchId: string;
+    prospect: CandidateCompany;
     fitScore: number;
     rationale: string;
     draftId: string | null;
     claims: ResearcherDraftClaim[];
-  }): Promise<{ candidate: QualifiedCandidate; candidateId: string }> {
-    const created = await this.deps.prisma.campaignCandidate.create({
+  }): Promise<{ prospect: QualifiedProspect; prospectId: string }> {
+    const created = await this.deps.prisma.prospect.create({
       data: {
-        campaignId: params.campaignId,
-        name: params.candidate.name,
-        domain: params.candidate.domain,
-        linkedinUrl: params.candidate.linkedinUrl,
+        prospectSearchId: params.prospectSearchId,
+        name: params.prospect.name,
+        domain: params.prospect.domain,
+        linkedinUrl: params.prospect.linkedinUrl,
         fitScore: params.fitScore,
         rationale: params.rationale,
         draftId: params.draftId,
@@ -856,15 +856,15 @@ export class CampaignOrchestrator {
       select: { id: true },
     });
     return {
-      candidate: {
-        name: params.candidate.name,
-        domain: params.candidate.domain,
-        linkedinUrl: params.candidate.linkedinUrl,
+      prospect: {
+        name: params.prospect.name,
+        domain: params.prospect.domain,
+        linkedinUrl: params.prospect.linkedinUrl,
         fitScore: params.fitScore,
         rationale: params.rationale,
         claims: params.claims,
       },
-      candidateId: created.id,
+      prospectId: created.id,
     };
   }
 
@@ -878,7 +878,7 @@ export class CampaignOrchestrator {
 }
 
 /** AgentRun.teammate value for the orchestrator's own (non-Researcher) calls. */
-export const CAMPAIGN_TEAMMATE = 'campaign-orchestrator';
+export const PROSPECT_SEARCH_TEAMMATE = 'prospect-search-orchestrator';
 /** inputContext.phase marker for the ICP-derivation AgentRun (detail read-back). */
 export const ICP_PHASE = 'derive_icp';
 /** How many wins-list companies to feed the ICP-derivation prompt. */
@@ -913,7 +913,7 @@ export function extractText(
  * fence the model may add despite instructions; falls back to a conservative
  * empty ICP (with the raw text as summary) if the JSON can't be parsed, so a
  * malformed model turn degrades to "sourced everything, derived nothing" rather
- * than crashing the campaign.
+ * than crashing the prospectSearch.
  */
 export function parseIcp(text: string): IcpParse {
   const obj = tryParseJson(text);
@@ -982,4 +982,4 @@ function clamp01(n: number): number {
   return n;
 }
 
-export type { CampaignEvent };
+export type { ProspectSearchEvent };

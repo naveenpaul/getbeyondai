@@ -4,14 +4,14 @@ import { AuthModule } from '../auth/auth.module';
 import { QueueModule } from '../queue/queue.module';
 import { TeammatesModule } from '../teammates/teammates.module';
 import { ConnectorsModule } from '../connectors/connectors.module';
-import { CampaignController } from './campaign.controller';
-import { CampaignService } from './campaign.service';
-import { CampaignWorker } from './campaign.worker';
+import { ProspectSearchController } from './prospect-search.controller';
+import { ProspectSearchService } from './prospect-search.service';
+import { ProspectSearchWorker } from './prospect-search.worker';
 
 /**
- * Campaigns module — the chat/campaigns lookalike-sourcing feature.
+ * ProspectSearches module — the chat/prospect-searches lookalike-sourcing feature.
  *
- * Wires the campaign controller (HTTP + SSE), the service (create/enqueue +
+ * Wires the prospectSearch controller (HTTP + SSE), the service (create/enqueue +
  * reads), and the pg-boss worker that runs the orchestrator. The orchestrator
  * itself is a plain class the worker constructs per job; it reuses the teammate
  * runtime (LlmResolver for the per-run provider) and the RunEventBus, both
@@ -25,7 +25,7 @@ import { CampaignWorker } from './campaign.worker';
     TeammatesModule,
     ConnectorsModule,
   ],
-  controllers: [CampaignController],
-  providers: [CampaignService, CampaignWorker],
+  controllers: [ProspectSearchController],
+  providers: [ProspectSearchService, ProspectSearchWorker],
 })
-export class CampaignsModule {}
+export class ProspectSearchModule {}

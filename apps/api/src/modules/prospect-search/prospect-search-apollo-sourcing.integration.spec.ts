@@ -16,7 +16,7 @@ import type {
 } from '../connectors/adapters/apollo/apollo.source';
 import type { ApolloOrgSearcher } from '../connectors/sourcing/apollo-sourcing.provider';
 import type { IcpCriteria } from '../connectors/sourcing/sourcing-provider';
-import { buildSourcingProvider } from './campaign.worker';
+import { buildSourcingProvider } from './prospect-search.worker';
 
 /**
  * Integration coverage for the Apollo sourcing path against real Postgres + the
@@ -70,7 +70,7 @@ function org(overrides: Partial<ApolloOrganization> = {}): ApolloOrganization {
 }
 
 describe.skipIf(!DATABASE_URL)(
-  'campaign Apollo sourcing (integration — needs live Postgres)',
+  'prospectSearch Apollo sourcing (integration — needs live Postgres)',
   () => {
     let app: NestFastifyApplication;
     let prisma: PrismaClient;

@@ -5,51 +5,51 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2, RotateCw } from 'lucide-react';
 import type {
-  CampaignDetailResponse,
-  CampaignStatus,
+  ProspectSearchDetailResponse,
+  ProspectSearchStatus,
 } from '@getbeyond/shared';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { CampaignTranscript } from '@/components/CampaignTranscript';
+import { ProspectSearchTranscript } from '@/components/ProspectSearchTranscript';
 import { ConnectedToolsSidebar } from '@/components/ConnectedToolsSidebar';
-import { ApiError, getCampaign, rerunCampaign } from '@/lib/api-client';
-import { useCampaignStream } from '@/lib/use-campaign-stream';
+import { ApiError, getProspectSearch, rerunProspectSearch } from '@/lib/api-client';
+import { useProspectSearchStream } from '@/lib/use-prospect-search-stream';
 
 /**
- * Campaign chat workspace.
+ * ProspectSearch chat workspace.
  *
  * Claude-web-shaped: a central transcript column + an always-open right rail
- * of connected tools/sources. The SSE stream (useCampaignStream) drives the
+ * of connected tools/sources. The SSE stream (useProspectSearchStream) drives the
  * live transcript — phase lines, "what's being run" tool lines, and qualified
- * candidate cards. On a terminal event we fetch the persisted detail once so
+ * prospect cards. On a terminal event we fetch the persisted detail once so
  * the page survives a refresh after the stream has closed (re-opening a
- * completed campaign shows its candidates without a live stream).
+ * completed prospectSearch shows its prospects without a live stream).
  *
  * Identity is resolved server-side from the session cookie; middleware ensures
- * /campaigns/** is only reachable after sign-in.
+ * /prospects/** is only reachable after sign-in.
  */
-export default function CampaignWorkspacePage({
+export default function ProspectSearchWorkspacePage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }): React.JSX.Element {
   const { id } = use(params);
 
-  const { events, connectionState, terminated } = useCampaignStream({
-    campaignId: id,
+  const { events, connectionState, terminated } = useProspectSearchStream({
+    prospectSearchId: id,
   });
 
-  const [detail, setDetail] = useState<CampaignDetailResponse | null>(null);
+  const [detail, setDetail] = useState<ProspectSearchDetailResponse | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
 
-  // Fetch the persisted detail (a) on mount, so header/sourcing/candidates
+  // Fetch the persisted detail (a) on mount, so header/sourcing/prospects
   // render even before the stream warms up or for an already-finished
-  // campaign, and (b) again once terminated to pick up the final snapshot.
+  // prospectSearch, and (b) again once terminated to pick up the final snapshot.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const result = await getCampaign(id);
+        const result = await getProspectSearch(id);
         if (!cancelled) setDetail(result);
       } catch (err) {
         if (cancelled) return;
@@ -67,12 +67,12 @@ export default function CampaignWorkspacePage({
     };
   }, [id, terminated]);
 
-  const campaign = detail?.campaign ?? null;
-  // While the stream has produced no candidate events yet, fall back to the
-  // persisted candidates from the detail fetch (e.g. reopening a finished
-  // campaign). Once live events arrive, the transcript reducer renders those.
-  const liveHasCandidates = events.some(
-    (e) => e.type === 'candidate_qualified',
+  const prospectSearch = detail?.prospectSearch ?? null;
+  // While the stream has produced no prospect events yet, fall back to the
+  // persisted prospects from the detail fetch (e.g. reopening a finished
+  // prospectSearch). Once live events arrive, the transcript reducer renders those.
+  const liveHasProspects = events.some(
+    (e) => e.type === 'prospect_qualified',
   );
 
   return (
@@ -89,22 +89,22 @@ export default function CampaignWorkspacePage({
         <header className="space-y-2">
           <div className="flex flex-wrap items-baseline gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">
-              {campaign?.title ?? 'Campaign'}
+              {prospectSearch?.title ?? 'ProspectSearch'}
             </h1>
-            {campaign ? <StatusBadge status={campaign.status} /> : null}
+            {prospectSearch ? <StatusBadge status={prospectSearch.status} /> : null}
             <span className="font-mono text-xs text-muted-foreground">{id}</span>
-            {/* Re-run is offered once a campaign has settled (failed or
+            {/* Re-run is offered once a prospectSearch has settled (failed or
                 completed); it clones the config into a fresh run and navigates
-                to the new campaign. Hidden while draft/running to avoid
+                to the new prospectSearch. Hidden while draft/running to avoid
                 spawning a duplicate of an in-flight run. */}
-            {campaign &&
-            (campaign.status === 'failed' ||
-              campaign.status === 'completed') ? (
-              <RerunButton campaignId={id} className="ml-auto" />
+            {prospectSearch &&
+            (prospectSearch.status === 'failed' ||
+              prospectSearch.status === 'completed') ? (
+              <RerunButton prospectSearchId={id} className="ml-auto" />
             ) : null}
           </div>
-          {campaign?.goal ? (
-            <p className="text-sm text-muted-foreground">{campaign.goal}</p>
+          {prospectSearch?.goal ? (
+            <p className="text-sm text-muted-foreground">{prospectSearch.goal}</p>
           ) : null}
         </header>
 
@@ -136,18 +136,18 @@ export default function CampaignWorkspacePage({
 
           {detailError && events.length === 0 ? (
             <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-              Failed to load campaign: {detailError}
+              Failed to load prospectSearch: {detailError}
             </div>
           ) : null}
 
-          {events.length > 0 || liveHasCandidates ? (
-            <CampaignTranscript events={events} terminated={terminated} />
+          {events.length > 0 || liveHasProspects ? (
+            <ProspectSearchTranscript events={events} terminated={terminated} />
           ) : detail ? (
-            <PersistedCandidates detail={detail} />
+            <PersistedProspects detail={detail} />
           ) : (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Connecting to the campaign…
+              Connecting to the prospectSearch…
             </div>
           )}
         </section>
@@ -156,7 +156,7 @@ export default function CampaignWorkspacePage({
       <aside className="mt-10 lg:mt-0">
         <div className="lg:sticky lg:top-8">
           {/*
-            CampaignDetailResponse doesn't echo the create-time SourcingConfig,
+            ProspectSearchDetailResponse doesn't echo the create-time SourcingConfig,
             so we pass null and the sidebar renders a neutral source row. When
             the API surfaces the sourcing config on the detail, bind it here.
           */}
@@ -168,16 +168,16 @@ export default function CampaignWorkspacePage({
 }
 
 /**
- * Re-runs the campaign: clones its persisted config into a new campaign and
+ * Re-runs the prospectSearch: clones its persisted config into a new prospectSearch and
  * navigates to it. Disabled while in flight so a double-click can't spawn two
  * runs. Errors surface inline beneath the header rather than as a toast (no
  * toast system here yet).
  */
 function RerunButton({
-  campaignId,
+  prospectSearchId,
   className,
 }: {
-  campaignId: string;
+  prospectSearchId: string;
   className?: string;
 }): React.JSX.Element {
   const router = useRouter();
@@ -188,8 +188,8 @@ function RerunButton({
     setSubmitting(true);
     setError(null);
     try {
-      const { campaignId: nextId } = await rerunCampaign(campaignId);
-      router.push(`/campaigns/${nextId}`);
+      const { prospectSearchId: nextId } = await rerunProspectSearch(prospectSearchId);
+      router.push(`/prospects/${nextId}`);
     } catch (err) {
       setError(
         err instanceof ApiError
@@ -230,36 +230,36 @@ function RerunButton({
 }
 
 /**
- * Renders candidates already persisted on the campaign when there's no live
- * stream (e.g. reopening a completed campaign). Reuses the transcript's
- * candidate rendering by synthesizing candidate_qualified events would be
+ * Renders prospects already persisted on the prospectSearch when there's no live
+ * stream (e.g. reopening a completed prospectSearch). Reuses the transcript's
+ * prospect rendering by synthesizing prospect_qualified events would be
  * heavier than warranted — a thin list mirrors the same card shape.
  */
-function PersistedCandidates({
+function PersistedProspects({
   detail,
 }: {
-  detail: CampaignDetailResponse;
+  detail: ProspectSearchDetailResponse;
 }): React.JSX.Element {
-  if (detail.candidates.length === 0) {
+  if (detail.prospects.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        No qualified candidates yet.
+        No qualified prospects yet.
       </p>
     );
   }
-  // Replay persisted candidates through the same transcript renderer by
-  // building synthetic candidate_qualified events, so the card UI stays DRY.
-  const synthetic = detail.candidates.map((candidate, i) => ({
-    type: 'candidate_qualified' as const,
-    campaignId: detail.campaign.id,
-    at: detail.campaign.updatedAt,
-    data: { candidate, index: i, total: detail.candidates.length },
+  // Replay persisted prospects through the same transcript renderer by
+  // building synthetic prospect_qualified events, so the card UI stays DRY.
+  const synthetic = detail.prospects.map((prospect, i) => ({
+    type: 'prospect_qualified' as const,
+    prospectSearchId: detail.prospectSearch.id,
+    at: detail.prospectSearch.updatedAt,
+    data: { prospect, index: i, total: detail.prospects.length },
   }));
-  return <CampaignTranscript events={synthetic} terminated />;
+  return <ProspectSearchTranscript events={synthetic} terminated />;
 }
 
 const STATUS_VARIANT: Record<
-  CampaignStatus,
+  ProspectSearchStatus,
   'secondary' | 'success' | 'warning' | 'destructive'
 > = {
   draft: 'secondary',
@@ -268,6 +268,6 @@ const STATUS_VARIANT: Record<
   failed: 'destructive',
 };
 
-function StatusBadge({ status }: { status: CampaignStatus }): React.JSX.Element {
+function StatusBadge({ status }: { status: ProspectSearchStatus }): React.JSX.Element {
   return <Badge variant={STATUS_VARIANT[status]}>{status}</Badge>;
 }

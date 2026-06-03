@@ -1,10 +1,10 @@
 import type { IcpCriteria } from '../connectors/sourcing/sourcing-provider';
 
 /**
- * Campaign orchestrator prompts.
+ * ProspectSearch orchestrator prompts.
  *
- * Two LLM steps in the campaign pipeline route through `callModel` (invariant
- * #3): ICP derivation from the wins list, and per-candidate fit scoring against
+ * Two LLM steps in the prospectSearch pipeline route through `callModel` (invariant
+ * #3): ICP derivation from the wins list, and per-prospect fit scoring against
  * that ICP. Both are constrained to emit STRICT JSON so the orchestrator parses
  * a known shape — these are not freeform agent turns. Prompts live in source
  * for the trust positioning (users can read/fork/audit them).
@@ -21,10 +21,10 @@ export interface WinExample {
   title: string | null;
 }
 
-export const ICP_DERIVATION_SYSTEM_PROMPT = `You are getbeyond ai's campaign ICP analyst.
+export const ICP_DERIVATION_SYSTEM_PROMPT = `You are getbeyond ai's prospectSearch ICP analyst.
 
 Given a founder's stated goal and a sample of their closed-won accounts (the
-"wins"), infer the Ideal Customer Profile the campaign should source lookalikes
+"wins"), infer the Ideal Customer Profile the prospectSearch should source lookalikes
 against.
 
 Be conservative and concrete. Derive ONLY what the wins + goal actually support;
@@ -56,7 +56,7 @@ export function buildIcpDerivationUserPrompt(
               `- ${w.company}${w.title ? ` (contact title: ${w.title})` : ''}`,
           )
           .join('\n');
-  return `Campaign goal:
+  return `ProspectSearch goal:
 ${goal}
 
 Closed-won accounts (the wins to find lookalikes of):
@@ -65,14 +65,14 @@ ${winLines}
 Derive the ICP as STRICT JSON per the system instructions.`;
 }
 
-export const CANDIDATE_SCORING_SYSTEM_PROMPT = `You are getbeyond ai's campaign fit scorer.
+export const CANDIDATE_SCORING_SYSTEM_PROMPT = `You are getbeyond ai's prospectSearch fit scorer.
 
-Given the campaign's Ideal Customer Profile (ICP) and a researched brief about a
-single candidate company (with cited facts), score how well the candidate matches
+Given the prospectSearch's Ideal Customer Profile (ICP) and a researched brief about a
+single prospect company (with cited facts), score how well the prospect matches
 the ICP and explain why in one or two sentences.
 
 Ground your reasoning in the brief. Do not invent facts the brief does not state.
-A candidate the brief barely supports should score low, not high.
+A prospect the brief barely supports should score low, not high.
 
 Respond with STRICT JSON ONLY — no prose, no markdown fences. Shape:
 
@@ -94,5 +94,5 @@ Candidate: ${candidateName}
 Researched brief (cited facts):
 ${brief}
 
-Score the candidate's fit to the ICP as STRICT JSON per the system instructions.`;
+Score the prospect's fit to the ICP as STRICT JSON per the system instructions.`;
 }

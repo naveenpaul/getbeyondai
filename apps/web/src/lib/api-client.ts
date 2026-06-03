@@ -1,9 +1,9 @@
 import type {
-  CampaignDetailResponse,
-  CampaignListResponse,
+  ProspectSearchDetailResponse,
+  ProspectSearchListResponse,
   ContactListsResponse,
-  CreateCampaignRequest,
-  CreateCampaignResponse,
+  CreateProspectSearchRequest,
+  CreateProspectSearchResponse,
   LlmSettingsResponse,
   ResearcherRunEnqueueResponse,
   ResearcherRunRequest,
@@ -132,9 +132,9 @@ export async function listContacts(params?: {
   return res.json() as Promise<ContactListResponse>;
 }
 
-// ─── Contact lists (campaign source / wins pickers) ─────────────────────────
+// ─── Contact lists (prospectSearch source / wins pickers) ─────────────────────────
 //
-// Powers the campaign composer's source + wins pickers: the user selects an
+// Powers the prospectSearch composer's source + wins pickers: the user selects an
 // imported list instead of pasting a raw id. CSV-imported and HubSpot-synced
 // lists both appear, distinguished by `source`.
 
@@ -427,61 +427,61 @@ export function buildSdrDrafterStreamUrl(runId: string): string {
   return `${env.apiUrl}/teammates/sdr-drafter/runs/${encodeURIComponent(runId)}/stream`;
 }
 
-// ─── Campaigns (lookalike sourcing) ─────────────────────────────────────────
+// ─── ProspectSearches (lookalike sourcing) ─────────────────────────────────────────
 //
-// A campaign derives an ICP from a wins list, sources a candidate pool, then
-// qualifies + ranks each candidate. The detail/list shapes plus the SSE event
+// A prospectSearch derives an ICP from a wins list, sources a prospect pool, then
+// qualifies + ranks each prospect. The detail/list shapes plus the SSE event
 // union live in @getbeyond/shared so the client binds to the typed contract.
 
-export async function createCampaign(
-  payload: CreateCampaignRequest,
-): Promise<CreateCampaignResponse> {
-  const res = await fetch(`${env.apiUrl}/campaigns`, {
+export async function createProspectSearch(
+  payload: CreateProspectSearchRequest,
+): Promise<CreateProspectSearchResponse> {
+  const res = await fetch(`${env.apiUrl}/prospect-searches`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
     credentials: 'include',
   });
   if (!res.ok) await readError(res);
-  return res.json() as Promise<CreateCampaignResponse>;
+  return res.json() as Promise<CreateProspectSearchResponse>;
 }
 
 /**
- * Re-run a campaign: clones its config into a new campaign and enqueues a fresh
- * run. Returns the NEW campaign id, which the caller navigates to.
+ * Re-run a prospectSearch: clones its config into a new prospectSearch and enqueues a fresh
+ * run. Returns the NEW prospectSearch id, which the caller navigates to.
  */
-export async function rerunCampaign(
+export async function rerunProspectSearch(
   id: string,
-): Promise<CreateCampaignResponse> {
+): Promise<CreateProspectSearchResponse> {
   const res = await fetch(
-    `${env.apiUrl}/campaigns/${encodeURIComponent(id)}/rerun`,
+    `${env.apiUrl}/prospect-searches/${encodeURIComponent(id)}/rerun`,
     { method: 'POST', credentials: 'include' },
   );
   if (!res.ok) await readError(res);
-  return res.json() as Promise<CreateCampaignResponse>;
+  return res.json() as Promise<CreateProspectSearchResponse>;
 }
 
-export async function listCampaigns(): Promise<CampaignListResponse> {
-  const res = await fetch(`${env.apiUrl}/campaigns`, {
+export async function listProspectSearches(): Promise<ProspectSearchListResponse> {
+  const res = await fetch(`${env.apiUrl}/prospect-searches`, {
     credentials: 'include',
   });
   if (!res.ok) await readError(res);
-  return res.json() as Promise<CampaignListResponse>;
+  return res.json() as Promise<ProspectSearchListResponse>;
 }
 
-export async function getCampaign(
+export async function getProspectSearch(
   id: string,
-): Promise<CampaignDetailResponse> {
+): Promise<ProspectSearchDetailResponse> {
   const res = await fetch(
-    `${env.apiUrl}/campaigns/${encodeURIComponent(id)}`,
+    `${env.apiUrl}/prospect-searches/${encodeURIComponent(id)}`,
     { credentials: 'include' },
   );
   if (!res.ok) await readError(res);
-  return res.json() as Promise<CampaignDetailResponse>;
+  return res.json() as Promise<ProspectSearchDetailResponse>;
 }
 
-export function buildCampaignStreamUrl(id: string): string {
-  return `${env.apiUrl}/campaigns/${encodeURIComponent(id)}/stream`;
+export function buildProspectSearchStreamUrl(id: string): string {
+  return `${env.apiUrl}/prospect-searches/${encodeURIComponent(id)}/stream`;
 }
 
 // ─── Org / invites / members ──────────────────────────────────────────────

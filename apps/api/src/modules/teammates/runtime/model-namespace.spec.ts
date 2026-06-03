@@ -27,7 +27,7 @@ describe('isModelForProvider', () => {
     expect(isModelForProvider('openai', 'gpt-5-future')).toBe(true);
   });
 
-  it('rejects the exact cross-provider mistake that broke campaign runs', () => {
+  it('rejects the exact cross-provider mistake that broke prospect search runs', () => {
     expect(isModelForProvider('openai', 'claude-sonnet-4-6')).toBe(false);
     expect(isModelForProvider('anthropic', 'gpt-4.1')).toBe(false);
   });

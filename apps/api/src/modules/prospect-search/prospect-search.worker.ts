@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import type { CampaignEvent, SourcingConfig } from '@getbeyond/shared';
+import type { ProspectSearchEvent, SourcingConfig } from '@getbeyond/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
 import { LlmResolver } from '../teammates/runtime/llm-resolver';
@@ -31,34 +31,34 @@ import {
   type DeploymentMode,
 } from '../../common/deployment';
 import {
-  CampaignOrchestrator,
-  CAMPAIGN_TEAMMATE,
+  ProspectSearchOrchestrator,
+  PROSPECT_SEARCH_TEAMMATE,
   CONTACT_SOURCING_DEFAULTS,
-} from './campaign-orchestrator';
+} from './prospect-search-orchestrator';
 import type { ConnectorKind } from '@getbeyond/shared';
-import { campaignFailed, toBusEvent } from './campaign-events';
+import { searchFailed, toBusEvent } from './prospect-search-events';
 
-export const CAMPAIGN_RUN_QUEUE = 'campaign-run';
+export const PROSPECT_SEARCH_RUN_QUEUE = 'prospect-search-run';
 
 /**
- * pg-boss consumer for campaign orchestrator runs.
+ * pg-boss consumer for prospectSearch orchestrator runs.
  *
- * Producer (controller) creates the Campaign synchronously (status='running')
- * to mint a campaignId, then enqueues this job. The worker builds the per-run
- * sourcing provider from the campaign's SourcingConfig, wires the orchestrator's
+ * Producer (controller) creates the ProspectSearch synchronously (status='running')
+ * to mint a prospectSearchId, then enqueues this job. The worker builds the per-run
+ * sourcing provider from the prospectSearch's SourcingConfig, wires the orchestrator's
  * event sink to the RunEventBus (so the SSE stream sees live progress), and
- * drives the campaign to terminal.
+ * drives the prospectSearch to terminal.
  *
  * Failure semantics:
  *   - The orchestrator never throws for expected failures (sourcing config,
- *     budget, research errors) — it sets Campaign.status='failed' and emits
- *     campaign_failed itself. Those return cleanly; the job succeeds.
- *   - A genuine thrown error (DB unreachable) leaves the campaign in 'running'
- *     and bubbles out. We emit a campaign_failed on the bus first (so the
+ *     budget, research errors) — it sets ProspectSearch.status='failed' and emits
+ *     search_failed itself. Those return cleanly; the job succeeds.
+ *   - A genuine thrown error (DB unreachable) leaves the prospectSearch in 'running'
+ *     and bubbles out. We emit a search_failed on the bus first (so the
  *     stream closes) then re-throw for pg-boss's retry policy.
  */
-export interface CampaignRunJobPayload {
-  campaignId: string;
+export interface ProspectSearchRunJobPayload {
+  prospectSearchId: string;
   orgId: string;
   triggeredBy: string;
   goal: string;
@@ -68,8 +68,8 @@ export interface CampaignRunJobPayload {
 }
 
 @Injectable()
-export class CampaignWorker implements OnModuleInit {
-  private readonly logger = new Logger(CampaignWorker.name);
+export class ProspectSearchWorker implements OnModuleInit {
+  private readonly logger = new Logger(ProspectSearchWorker.name);
   private readonly queue: QueueService;
   private readonly prisma: PrismaService;
   private readonly resolver: LlmResolver;
@@ -91,21 +91,21 @@ export class CampaignWorker implements OnModuleInit {
   }
 
   async onModuleInit(): Promise<void> {
-    await this.queue.work<CampaignRunJobPayload>(
-      CAMPAIGN_RUN_QUEUE,
+    await this.queue.work<ProspectSearchRunJobPayload>(
+      PROSPECT_SEARCH_RUN_QUEUE,
       async (job) => {
         const { data } = job;
         this.logger.log(
-          `processing campaign-run job ${job.id} for Campaign ${data.campaignId}`,
+          `processing prospect-search-run job ${job.id} for ProspectSearch ${data.prospectSearchId}`,
         );
         try {
           // Resolve the per-run provider (org BYO → env → block). A "no key"
-          // failure is caught below → campaign_failed on the stream.
+          // failure is caught below → search_failed on the stream.
           const { provider, modelPrimary } = await this.resolver.resolve(
             data.orgId,
-            CAMPAIGN_TEAMMATE,
+            PROSPECT_SEARCH_TEAMMATE,
           );
-          const orchestrator = new CampaignOrchestrator({
+          const orchestrator = new ProspectSearchOrchestrator({
             prisma: this.prisma,
             llm: provider,
             buildSourcingProvider: (orgId) =>
@@ -117,14 +117,14 @@ export class CampaignWorker implements OnModuleInit {
               ),
             buildContactSourcers: (orgId) =>
               buildContactSourcers(this.prisma, this.credentials, orgId),
-            // CampaignEvents ride the same bus the teammate runtime uses.
-            // toBusEvent stamps runId=campaignId so the bus (which routes by
-            // runId) delivers them to the stream subscribed by campaignId.
-            emitEvent: (event: CampaignEvent) =>
+            // ProspectSearchEvents ride the same bus the teammate runtime uses.
+            // toBusEvent stamps runId=prospectSearchId so the bus (which routes by
+            // runId) delivers them to the stream subscribed by prospectSearchId.
+            emitEvent: (event: ProspectSearchEvent) =>
               this.eventBus.publish(toBusEvent(event)),
           });
           const result = await orchestrator.run({
-            campaignId: data.campaignId,
+            prospectSearchId: data.prospectSearchId,
             orgId: data.orgId,
             triggeredBy: data.triggeredBy,
             goal: data.goal,
@@ -133,24 +133,24 @@ export class CampaignWorker implements OnModuleInit {
             budgetCents: data.budgetCents,
           });
           this.logger.log(
-            `completed campaign-run job ${job.id}: status=${result.status} ` +
-              `candidates=${result.candidateCount} cost=${result.costCents}¢`,
+            `completed prospect-search-run job ${job.id}: status=${result.status} ` +
+              `prospects=${result.prospectCount} cost=${result.costCents}¢`,
           );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.eventBus.publish(
-            toBusEvent(campaignFailed(data.campaignId, message)),
+            toBusEvent(searchFailed(data.prospectSearchId, message)),
           );
           throw err;
         }
       },
     );
-    this.logger.log(`registered worker for queue "${CAMPAIGN_RUN_QUEUE}"`);
+    this.logger.log(`registered worker for queue "${PROSPECT_SEARCH_RUN_QUEUE}"`);
   }
 }
 
 /**
- * Build the sourcing provider for a campaign from its SourcingConfig.
+ * Build the sourcing provider for a prospectSearch from its SourcingConfig.
  *   - contact_list → the no-key ContactListSourcingProvider (ships today).
  *   - apollo (explicit) → live company discovery; throws SourcingUnavailableError
  *     if Apollo isn't connected.
@@ -163,7 +163,7 @@ export class CampaignWorker implements OnModuleInit {
  * skips Apollo entirely. Apollo paths load + decrypt the key at the credential
  * boundary (invariant #6); a benign, user-fixable problem (not connected / key
  * rejected / circuit open) throws `SourcingUnavailableError`, which the
- * orchestrator surfaces gracefully rather than failing the campaign.
+ * orchestrator surfaces gracefully rather than failing the prospectSearch.
  */
 export async function buildSourcingProvider(
   prisma: PrismaService,
@@ -251,7 +251,7 @@ const CONTACT_SOURCER_PRIORITY: readonly ConnectorKind[] = ['zoominfo', 'snov'];
  * the BYO key (invariant #6) and wraps the adapter as a `WaterfallConnector`
  * bound to those creds + the credential-manager's breaker hooks. A connector
  * that isn't connected, or whose key is rejected / circuit-broken, simply sits
- * out the waterfall — Stage 5 is best-effort and never fails the campaign.
+ * out the waterfall — Stage 5 is best-effort and never fails the prospectSearch.
  */
 export async function buildContactSourcers(
   prisma: PrismaService,
@@ -289,7 +289,7 @@ async function buildOneContactSourcer(
     creds = await credentials.load(account.id);
   } catch (err) {
     // A benign credential problem (key rejected / circuit open) just means this
-    // connector sits out the waterfall — never fail the campaign over it.
+    // connector sits out the waterfall — never fail the prospectSearch over it.
     if (err instanceof CredentialManagerError) return null;
     throw err;
   }

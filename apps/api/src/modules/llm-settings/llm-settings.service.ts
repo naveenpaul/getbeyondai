@@ -57,7 +57,7 @@ const ENV_FALLBACK_FLAG = 'LLM_ALLOW_ENV_FALLBACK';
 /**
  * Teammates that can be routed in settings. These slugs MUST match the worker
  * resolution keys (researcher.worker `RESEARCHER_TEAMMATE`, sdr-drafter.worker
- * `SDR_DRAFTER_TEAMMATE`, and `CAMPAIGN_TEAMMATE`), or a routing saved here
+ * `SDR_DRAFTER_TEAMMATE`, and `PROSPECT_SEARCH_TEAMMATE`), or a routing saved here
  * won't be found by the run that resolves the provider. The status endpoint
  * returns ALL of these (with current-or-default routing) so a fresh org sees
  * teammates to route — otherwise there'd be nothing to point at a new key.
@@ -65,7 +65,7 @@ const ENV_FALLBACK_FLAG = 'LLM_ALLOW_ENV_FALLBACK';
 const KNOWN_TEAMMATES = [
   'researcher',
   'sdr-drafter',
-  'campaign-orchestrator',
+  'prospect-search-orchestrator',
 ] as const;
 
 /** shared LlmProviderName → Prisma Provider enum. Total over the union. */
@@ -248,7 +248,7 @@ export class LlmSettingsService {
     // Root-fix guard: reject a model id that doesn't belong to the chosen
     // provider (e.g. an OpenAI route with a claude-* model). This is the single
     // write chokepoint — blocking it here makes the inconsistent state that
-    // silently failed campaign runs impossible to persist from any client.
+    // silently failed prospect search runs impossible to persist from any client.
     if (!isModelForProvider(request.provider, modelPrimary)) {
       throw new BadRequestException(
         modelMismatchMessage(request.provider, modelPrimary, 'modelPrimary'),

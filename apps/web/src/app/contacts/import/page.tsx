@@ -14,7 +14,7 @@ import { CsvImportFlow } from '@/components/CsvImportFlow';
 
 /**
  * Standalone CSV import page. The flow itself lives in <CsvImportFlow> so it can
- * be reused in-context (e.g. inside the campaign composer's SourcePicker modal)
+ * be reused in-context (e.g. inside the prospectSearch composer's SourcePicker modal)
  * without navigating away. This page just supplies the chrome + a "View
  * contacts" exit once the import finishes.
  */

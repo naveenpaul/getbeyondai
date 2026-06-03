@@ -29,7 +29,7 @@ import {
 type ByoStatus = SnovAccountStatus | ZoomInfoAccountStatus;
 
 /**
- * Settings → Connectors. Where the org wires data sources for campaign
+ * Settings → Connectors. Where the org wires data sources for prospectSearch
  * discovery. Apollo (BYO key) is the first; it's self-host-only (vendor ToS),
  * so on Cloud the API reports `available:false` and we show why instead of a
  * key field. Keys are validated + stored encrypted by the API and never shown
@@ -106,7 +106,7 @@ export default function ConnectorsSettingsPage(): React.JSX.Element {
           </h2>
           <p className="text-sm text-muted-foreground">
             Find the actual people + verified emails at your matched companies.
-            Connect at least one so campaigns can surface contacts to reach out
+            Connect at least one so prospectSearches can surface contacts to reach out
             to.
           </p>
         </div>

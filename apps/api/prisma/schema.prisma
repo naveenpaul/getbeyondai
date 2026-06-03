@@ -58,7 +58,7 @@ model Organization {
   syncRuns          SyncRun[]
   llmCredentials    OrgLlmCredential[]
   teammateConfigs   OrgTeammateConfig[]
-  campaigns         Campaign[]
+  prospectSearches  ProspectSearch[]
 
   @@map("organizations")
 }
@@ -466,88 +466,88 @@ model OrgTeammateConfig {
 }
 
 // ============================================================================
-// Campaigns — the maintained "activity" behind the chat workspace. A campaign
-// is a lookalike-sourcing run: derive an ICP from a wins list, source a
-// candidate pool, qualify + rank via the Researcher. See
+// ProspectSearches — the maintained "activity" behind the chat workspace. A
+// prospect search is a lookalike-sourcing run: derive an ICP from a wins list,
+// source a prospect pool, qualify + rank via the Researcher. See
 // docs/product-workflow-spec.md. The orchestrator + run linkage land in a
 // follow-up; this is the persisted entity + status.
 // ============================================================================
 
-enum CampaignStatus {
+enum ProspectSearchStatus {
   draft // created, not yet run
   running // orchestrator executing
   completed
   failed
 }
 
-model Campaign {
-  id          String         @id @default(cuid())
+model ProspectSearch {
+  id          String               @id @default(cuid())
   orgId       String
   title       String
   goal        String // the natural-language intent the user typed in the chat
-  status      CampaignStatus @default(draft)
+  status      ProspectSearchStatus @default(draft)
   // Soft reference (like ContactList.source) to the ContactList of closed-won
   // accounts the ICP is derived from. Nullable until a wins list is attached.
   winsListId  String?
-  // The run configuration, persisted so a campaign can be re-run faithfully
+  // The run configuration, persisted so a search can be re-run faithfully
   // (and so detail can surface what it used). Previously these lived ONLY in
   // the pg-boss job payload — business state outside the DB, which broke re-run.
-  //   sourcing    — the SourcingConfig (candidate pool). null = no source.
-  //   budgetCents — per-campaign cost cap. null = orchestrator default.
+  //   sourcing    — the SourcingConfig (prospect pool). null = no source.
+  //   budgetCents — per-search cost cap. null = orchestrator default.
   sourcing    Json? // SourcingConfig | null
   budgetCents Int?
   createdBy   String // userId
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
 
-  org        Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  candidates CampaignCandidate[]
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  prospects Prospect[]
 
   @@index([orgId, status])
-  @@map("campaigns")
+  @@map("prospect_searches")
 }
 
-// A sourced company qualified + scored against the campaign ICP. The cited
+// A sourced company qualified + scored against the search ICP. The cited
 // firmographic signals live on the linked Researcher Draft (cite-or-abstain
 // enforced by the runtime); fitScore + rationale are the orchestrator's ranking.
-model CampaignCandidate {
-  id          String   @id @default(cuid())
-  campaignId  String
-  name        String
-  domain      String?
-  linkedinUrl String?
-  fitScore    Float
-  rationale   String
-  draftId     String? // the Researcher's cited brief for this candidate
-  createdAt   DateTime @default(now())
+model Prospect {
+  id               String   @id @default(cuid())
+  prospectSearchId String
+  name             String
+  domain           String?
+  linkedinUrl      String?
+  fitScore         Float
+  rationale        String
+  draftId          String? // the Researcher's cited brief for this prospect
+  createdAt        DateTime @default(now())
 
-  campaign Campaign                   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  contacts CampaignCandidateContact[]
-  signals  CompanySignal[]
+  prospectSearch ProspectSearch    @relation(fields: [prospectSearchId], references: [id], onDelete: Cascade)
+  contacts       ProspectContact[]
+  signals        CompanySignal[]
 
-  @@index([campaignId])
-  @@map("campaign_candidates")
+  @@index([prospectSearchId])
+  @@map("prospects")
 }
 
-// Join: the contacts sourced for a qualified campaign company (Stage 5 of the
+// Join: the contacts sourced for a qualified prospect company (Stage 5 of the
 // prospecting pipeline). Many-to-many — a Contact is org-global and may surface
-// across campaigns; a candidate has many contacts. sourceKind records which
+// across searches; a prospect has many contacts. sourceKind records which
 // connector won the contact in the waterfall (provenance, mirrors ContactSource).
-model CampaignCandidateContact {
-  id                  String        @id @default(cuid())
-  campaignCandidateId String
-  contactId           String
+model ProspectContact {
+  id                String        @id @default(cuid())
+  prospectId        String
+  contactId         String
   // Connector that produced this contact in the waterfall (snov | zoominfo | ...).
-  sourceKind          ConnectorKind
-  emailVerification   String? // 'verified' | 'unverified' | 'unknown' at source time
-  createdAt           DateTime      @default(now())
+  sourceKind        ConnectorKind
+  emailVerification String? // 'verified' | 'unverified' | 'unknown' at source time
+  createdAt         DateTime      @default(now())
 
-  candidate CampaignCandidate @relation(fields: [campaignCandidateId], references: [id], onDelete: Cascade)
-  contact   Contact           @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  prospect Prospect @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+  contact  Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
-  @@unique([campaignCandidateId, contactId])
+  @@unique([prospectId, contactId])
   @@index([contactId])
-  @@map("campaign_candidate_contacts")
+  @@map("prospect_contacts")
 }
 
 // A buying-signal observation for one qualified company (Stage 6 of the
@@ -566,7 +566,7 @@ model CampaignCandidateContact {
 // citation, same rule as Claim).
 model CompanySignal {
   id          String       @id @default(cuid())
-  candidateId String
+  prospectId  String
   key         String // → SignalDefinition.key (validated against the registry on write)
   status      SignalStatus @default(unknown)
   value       Json         @default("{}") // signal-specific payload, e.g. { amount: 20000000, round: "B" }
@@ -577,9 +577,9 @@ model CompanySignal {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
-  candidate CampaignCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  prospect Prospect @relation(fields: [prospectId], references: [id], onDelete: Cascade)
 
-  @@unique([candidateId, key]) // re-evaluation UPDATES, never duplicates
+  @@unique([prospectId, key]) // re-evaluation UPDATES, never duplicates
   @@index([key, status]) // "all companies where signal X fired" is a real query
   @@map("company_signals")
 }
@@ -666,11 +666,11 @@ model Contact {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  org                Organization               @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  emails             ContactEmail[]
-  sources            ContactSource[]
-  lists              ContactListMember[]
-  campaignCandidates CampaignCandidateContact[]
+  org              Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  emails           ContactEmail[]
+  sources          ContactSource[]
+  lists            ContactListMember[]
+  prospectContacts ProspectContact[]
 
   @@unique([orgId, normalizedEmail]) // primary identity constraint; NULL allowed, fallback to linkedinUrl
   @@index([orgId, linkedinUrl]) // identity fallback when email missing

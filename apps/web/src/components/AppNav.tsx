@@ -49,9 +49,9 @@ interface NavItem {
 }
 
 const NAV_ITEMS: readonly NavItem[] = [
-  // Campaigns is the home/primary surface. Its `match` is '/' but we special-
+  // ProspectSearches is the home/primary surface. Its `match` is '/' but we special-
   // case the home route in `isActive` so it doesn't light up under every path.
-  { href: '/', label: 'Prospects', icon: Megaphone, match: '/campaigns' },
+  { href: '/', label: 'Prospects', icon: Megaphone, match: '/prospects' },
   { href: '/contacts', label: 'Contacts', icon: Users, match: '/contacts' },
   { href: '/research/new', label: 'Researcher', icon: Search, match: '/research' },
   { href: '/draft/sdr/new', label: 'SDR Drafter', icon: Mail, match: '/draft' },
@@ -62,12 +62,12 @@ const MOBILE_NAV_PANEL_ID = 'app-nav-mobile-panel';
 
 /**
  * True when `pathname` falls within the section rooted at `match`. The
- * Campaigns section spans both the home list (`/`, which IS the campaign list)
- * and the `/campaigns/...` detail routes, so it gets a small special case.
+ * ProspectSearches section spans both the home list (`/`, which IS the prospectSearch list)
+ * and the `/prospects/...` detail routes, so it gets a small special case.
  */
 function isActive(pathname: string, match: string): boolean {
-  if (match === '/campaigns') {
-    return pathname === '/' || pathname === '/campaigns' || pathname.startsWith('/campaigns/');
+  if (match === '/prospects') {
+    return pathname === '/' || pathname === '/prospects' || pathname.startsWith('/prospects/');
   }
   return pathname === match || pathname.startsWith(`${match}/`);
 }

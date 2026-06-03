@@ -167,7 +167,7 @@ describe('LlmSettingsService.getSettings', () => {
         modelFast: 'claude-haiku-4-5-20251001',
       },
       {
-        teammate: 'campaign-orchestrator',
+        teammate: 'prospect-search-orchestrator',
         provider: 'anthropic',
         modelPrimary: 'claude-sonnet-4-6',
         modelFast: 'claude-haiku-4-5-20251001',
@@ -417,14 +417,14 @@ describe('LlmSettingsService.saveRouting', () => {
   });
 
   // Root-fix: the write chokepoint rejects a provider↔model mismatch, so the
-  // state that silently failed campaign runs can never be persisted.
+  // state that silently failed prospect search runs can never be persisted.
   it('rejects a primary model that does not belong to the provider (openai + claude-*)', async () => {
     const configUpsert = upsertEcho();
     const { service } = makeService({ configUpsert });
 
     await expect(
       service.saveRouting('org-1', {
-        teammate: 'campaign-orchestrator',
+        teammate: 'prospect-search-orchestrator',
         provider: 'openai',
         modelPrimary: 'claude-sonnet-4-6',
       }),
