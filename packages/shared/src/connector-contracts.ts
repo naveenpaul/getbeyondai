@@ -110,6 +110,16 @@ export interface NormalizedContact {
   title?: string | null;
   company?: string | null;
   linkedinUrl?: string | null;
+  /**
+   * Normalized email deliverability signal, mapped by each adapter from its
+   * vendor-specific field (Snov `smtp_status`, Apollo `email_status`, …). Lets
+   * the sourcing waterfall judge "is this email verified?" without parsing
+   * `rawPayload`. Omit when the vendor gives no signal (treated as 'unknown').
+   *   verified   — vendor confirmed deliverable (Snov 'valid', Apollo 'verified')
+   *   unverified — vendor guessed/pattern-matched, not confirmed
+   *   unknown    — vendor could not determine (catch-all, greylisted, absent)
+   */
+  emailVerification?: 'verified' | 'unverified' | 'unknown';
   /** The full vendor record. Stored as ContactSource.rawPayload (may spill to S3 at >10KB). */
   rawPayload: unknown;
 }

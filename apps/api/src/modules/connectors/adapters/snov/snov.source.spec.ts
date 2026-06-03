@@ -240,6 +240,27 @@ describe('SnovSourceAdapter — syncContacts happy path', () => {
     expect(statuses).toEqual(['valid', 'unknown']);
   });
 
+  it('maps smtp_status to the normalized emailVerification signal', async () => {
+    const { fetch } = buildFetch({
+      prospectsByPage: {
+        1: [prospect({ key: 'a' }), prospect({ key: 'b' }), prospect({ key: 'c' })],
+      },
+      emailsByKey: {
+        a: [{ email: 'a@acme.com', smtp_status: 'valid' }],
+        b: [{ email: 'b@acme.com', smtp_status: 'unknown' }],
+        c: [{ email: 'c@acme.com', smtp_status: 'not_valid' }],
+      },
+    });
+    const contacts = await collect(
+      adapterWith(fetch).syncContacts(syncParams({ domains: ['acme.com'] })),
+    );
+    expect(contacts.map((c) => c.emailVerification)).toEqual([
+      'verified',
+      'unknown',
+      'unverified',
+    ]);
+  });
+
   it('falls back to the email as externalId when there is no LinkedIn URL', async () => {
     const { fetch } = buildFetch({
       prospectsByPage: { 1: [prospect({ key: 'a', source_page: null })] },

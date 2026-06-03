@@ -489,8 +489,30 @@ function toSnovContact(
     title: nullIfBlank(prospect.position),
     company,
     linkedinUrl: linkedin,
+    emailVerification: mapSmtpStatus(email?.smtp_status),
     rawPayload: { prospect, email, domain },
   };
+}
+
+/**
+ * Map Snov's `smtp_status` to the normalized verification signal.
+ *   'valid'                          → verified (confirmed deliverable)
+ *   'not_valid' / 'invalid'          → unverified (vendor says bad)
+ *   'unknown' / 'greylisted' /       → unknown (catch-all or undeterminable)
+ *   'accept_all' / absent
+ */
+function mapSmtpStatus(
+  status: string | null | undefined,
+): 'verified' | 'unverified' | 'unknown' {
+  switch (nullIfBlank(status)?.toLowerCase()) {
+    case 'valid':
+      return 'verified';
+    case 'not_valid':
+    case 'invalid':
+      return 'unverified';
+    default:
+      return 'unknown';
+  }
 }
 
 /** The cursor is "<domainIndex>:<page>"; default to the first domain, page 1. */
