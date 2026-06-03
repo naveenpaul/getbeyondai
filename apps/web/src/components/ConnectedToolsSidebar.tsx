@@ -40,13 +40,13 @@ function describeSource(sourcing?: SourcingConfig | null): ToolEntry {
     return {
       icon: Database,
       name: 'Apollo firmographic search',
-      detail: 'Candidate pool · reserved (BYO key)',
+      detail: 'Prospect pool · reserved (BYO key)',
     };
   }
   return {
     icon: Database,
-    name: 'Candidate source',
-    detail: 'Set when the campaign starts',
+    name: 'Prospect source',
+    detail: 'Set when the search starts',
   };
 }
 
@@ -59,7 +59,7 @@ const RUNTIME_TOOLS: readonly ToolEntry[] = [
   {
     icon: Globe,
     name: 'Page fetch',
-    detail: 'Reads sources cited in each candidate',
+    detail: 'Reads sources cited in each prospect',
   },
 ];
 

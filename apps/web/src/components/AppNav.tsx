@@ -51,7 +51,7 @@ interface NavItem {
 const NAV_ITEMS: readonly NavItem[] = [
   // Campaigns is the home/primary surface. Its `match` is '/' but we special-
   // case the home route in `isActive` so it doesn't light up under every path.
-  { href: '/', label: 'Campaigns', icon: Megaphone, match: '/campaigns' },
+  { href: '/', label: 'Prospects', icon: Megaphone, match: '/campaigns' },
   { href: '/contacts', label: 'Contacts', icon: Users, match: '/contacts' },
   { href: '/research/new', label: 'Researcher', icon: Search, match: '/research' },
   { href: '/draft/sdr/new', label: 'SDR Drafter', icon: Mail, match: '/draft' },

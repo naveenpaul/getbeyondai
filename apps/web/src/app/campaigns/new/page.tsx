@@ -10,7 +10,7 @@ export default function NewCampaignPage(): React.JSX.Element {
     <main className="container max-w-2xl space-y-6 py-12">
       <header className="space-y-2">
         <h1 className="text-2xl font-semibold tracking-tight">
-          Start a campaign
+          Start a search
         </h1>
         <p className="text-sm text-muted-foreground">
           Describe your goal. We&apos;ll derive your ICP, source lookalikes, and

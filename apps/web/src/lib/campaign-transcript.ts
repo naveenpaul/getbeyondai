@@ -89,7 +89,7 @@ export function buildCampaignTranscript(
         rows.push({
           key: `started|${e.at}`,
           kind: 'phase',
-          primary: 'Campaign started',
+          primary: 'Search started',
           secondary: e.data.goal,
         });
         break;
@@ -108,7 +108,7 @@ export function buildCampaignTranscript(
         rows.push({
           key: `sourcing-started|${e.at}`,
           kind: 'phase',
-          primary: 'Sourcing candidates',
+          primary: 'Sourcing prospects',
           secondary: `via ${e.data.provider}`,
         });
         break;
@@ -118,7 +118,7 @@ export function buildCampaignTranscript(
           key: `sourcing-completed|${e.at}`,
           kind: 'phase',
           primary: 'Sourcing complete',
-          secondary: `${e.data.candidateCount} candidates · ${e.data.summary}`,
+          secondary: `${e.data.candidateCount} prospects · ${e.data.summary}`,
         });
         break;
 
@@ -140,7 +140,7 @@ export function buildCampaignTranscript(
           key: `terminal-completed|${e.at}`,
           kind: 'terminal',
           isError: false,
-          primary: 'Campaign complete',
+          primary: 'Search complete',
           secondary: `${e.data.candidateCount} qualified · ${formatCents(e.data.costCents)}`,
         });
         break;
@@ -150,7 +150,7 @@ export function buildCampaignTranscript(
           key: `terminal-failed|${e.at}`,
           kind: 'terminal',
           isError: true,
-          primary: 'Campaign failed',
+          primary: 'Search failed',
           secondary: e.data.message,
         });
         break;

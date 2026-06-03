@@ -68,7 +68,7 @@ export function ConnectApolloBanner(): React.JSX.Element | null {
           )}
           <span className="text-foreground">
             {connectedOk
-              ? 'Apollo connected — new campaigns auto-discover companies from your ICP.'
+              ? 'Apollo connected — new searches auto-discover companies from your ICP.'
               : state.kind === 'connected'
                 ? 'Your Apollo key needs attention — reconnect to keep discovering companies.'
                 : 'Connect Apollo to auto-discover companies matching your ICP.'}

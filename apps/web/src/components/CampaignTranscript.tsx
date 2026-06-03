@@ -42,7 +42,7 @@ export function CampaignTranscript({
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         {terminated ? (
-          'No activity recorded for this campaign.'
+          'No activity recorded for this search.'
         ) : (
           <>
             <Loader2 className="h-3.5 w-3.5 animate-spin" />

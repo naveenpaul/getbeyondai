@@ -118,7 +118,7 @@ export function CampaignComposer({
                 <Loader2 className="animate-spin" /> Starting…
               </>
             ) : (
-              <>Start campaign →</>
+              <>Start search →</>
             )}
           </Button>
         </div>
