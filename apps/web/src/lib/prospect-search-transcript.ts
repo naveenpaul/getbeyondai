@@ -1,36 +1,36 @@
 import type {
-  CampaignEvent,
+  ProspectSearchEvent,
   IcpSummary,
-  QualifiedCandidate,
+  QualifiedProspect,
   RunEvent,
 } from '@getbeyond/shared';
 
 /**
- * Pure reducer: CampaignEvent[] → an ordered transcript of renderable rows.
+ * Pure reducer: ProspectSearchEvent[] → an ordered transcript of renderable rows.
  *
  * The chat workspace shows a live transcript mixing three things:
- *  - phase lines (campaign_started, icp_derived, sourcing_*) — narration
+ *  - phase lines (search_started, icp_derived, sourcing_*) — narration
  *  - "what's being run" lines (tool_activity, wrapping a RunEvent) — the
  *    granular tool calls, collapsed so a started/completed pair updates one
  *    row in place rather than emitting two
- *  - candidate result cards (candidate_qualified) — the actual output
+ *  - prospect result cards (prospect_qualified) — the actual output
  *
  * Kept pure (no React) so it's the unit-test target for the feature: feed an
  * event array, assert the row sequence. `apps/web` has no test runner yet —
  * see the report for the bootstrap note.
  *
  * NOTE on tool_activity collapsing: the underlying RunEvent stream may belong
- * to several teammate runs over a campaign's life, so a `toolSeq` is only
+ * to several teammate runs over a prospectSearch's life, so a `toolSeq` is only
  * unique within one run. We key in-flight tool rows by `runId|toolSeq` to keep
  * pairs from colliding across runs.
  */
 
-export type CampaignRowKind = 'phase' | 'tool' | 'candidate' | 'terminal';
+export type ProspectSearchRowKind = 'phase' | 'tool' | 'prospect' | 'terminal';
 
 interface BaseRow {
   /** Stable React key + de-dup identity. */
   key: string;
-  kind: CampaignRowKind;
+  kind: ProspectSearchRowKind;
 }
 
 export interface PhaseRow extends BaseRow {
@@ -48,9 +48,9 @@ export interface ToolRow extends BaseRow {
   secondary?: string;
 }
 
-export interface CandidateRow extends BaseRow {
-  kind: 'candidate';
-  candidate: QualifiedCandidate;
+export interface ProspectRow extends BaseRow {
+  kind: 'prospect';
+  prospect: QualifiedProspect;
   index: number;
   total: number;
 }
@@ -62,21 +62,21 @@ export interface TerminalRow extends BaseRow {
   secondary?: string;
 }
 
-export type CampaignRow = PhaseRow | ToolRow | CandidateRow | TerminalRow;
+export type ProspectSearchRow = PhaseRow | ToolRow | ProspectRow | TerminalRow;
 
-export interface CampaignTranscript {
-  rows: CampaignRow[];
+export interface ProspectSearchTranscript {
+  rows: ProspectSearchRow[];
   /** Latest derived ICP, surfaced separately from the row feed for the header. */
   icp: IcpSummary | null;
-  /** Candidates in arrival order, for callers that want the cards alone. */
-  candidates: QualifiedCandidate[];
+  /** Prospects in arrival order, for callers that want the cards alone. */
+  prospects: QualifiedProspect[];
 }
 
-export function buildCampaignTranscript(
-  events: CampaignEvent[],
-): CampaignTranscript {
-  const rows: CampaignRow[] = [];
-  const candidates: QualifiedCandidate[] = [];
+export function buildProspectSearchTranscript(
+  events: ProspectSearchEvent[],
+): ProspectSearchTranscript {
+  const rows: ProspectSearchRow[] = [];
+  const prospects: QualifiedProspect[] = [];
   let icp: IcpSummary | null = null;
 
   // Map "runId|toolSeq" → index of its in-flight ToolRow, so the completed
@@ -85,7 +85,7 @@ export function buildCampaignTranscript(
 
   for (const e of events) {
     switch (e.type) {
-      case 'campaign_started':
+      case 'search_started':
         rows.push({
           key: `started|${e.at}`,
           kind: 'phase',
@@ -118,34 +118,34 @@ export function buildCampaignTranscript(
           key: `sourcing-completed|${e.at}`,
           kind: 'phase',
           primary: 'Sourcing complete',
-          secondary: `${e.data.candidateCount} prospects · ${e.data.summary}`,
+          secondary: `${e.data.prospectCount} prospects · ${e.data.summary}`,
         });
         break;
 
-      case 'candidate_qualified': {
-        const { candidate, index, total } = e.data;
-        candidates.push(candidate);
+      case 'prospect_qualified': {
+        const { prospect, index, total } = e.data;
+        prospects.push(prospect);
         rows.push({
-          key: `candidate|${index}|${candidate.domain ?? candidate.name}`,
-          kind: 'candidate',
-          candidate,
+          key: `prospect|${index}|${prospect.domain ?? prospect.name}`,
+          kind: 'prospect',
+          prospect,
           index,
           total,
         });
         break;
       }
 
-      case 'campaign_completed':
+      case 'search_completed':
         rows.push({
           key: `terminal-completed|${e.at}`,
           kind: 'terminal',
           isError: false,
           primary: 'Search complete',
-          secondary: `${e.data.candidateCount} qualified · ${formatCents(e.data.costCents)}`,
+          secondary: `${e.data.prospectCount} qualified · ${formatCents(e.data.costCents)}`,
         });
         break;
 
-      case 'campaign_failed':
+      case 'search_failed':
         rows.push({
           key: `terminal-failed|${e.at}`,
           kind: 'terminal',
@@ -161,19 +161,19 @@ export function buildCampaignTranscript(
     }
   }
 
-  return { rows, icp, candidates };
+  return { rows, icp, prospects };
 }
 
 /**
  * Folds a single wrapped RunEvent into the transcript's tool rows. Only the
  * tool-call events surface as "what's being run" lines; model-call and
  * draft/terminal RunEvents are internal to the underlying teammate run and
- * are intentionally not shown at the campaign level (the campaign has its own
+ * are intentionally not shown at the prospectSearch level (the prospectSearch has its own
  * terminal events).
  */
 function applyToolActivity(
   event: RunEvent,
-  rows: CampaignRow[],
+  rows: ProspectSearchRow[],
   toolRowIndex: Map<string, number>,
 ): void {
   switch (event.type) {
@@ -206,7 +206,7 @@ function applyToolActivity(
       }
       break;
     }
-    // model_call_*, draft_emitted, run_* are not surfaced at campaign level.
+    // model_call_*, draft_emitted, run_* are not surfaced at prospectSearch level.
     default:
       break;
   }

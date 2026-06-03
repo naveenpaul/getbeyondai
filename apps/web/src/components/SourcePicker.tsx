@@ -13,7 +13,7 @@ import {
 } from '@/components/CsvImportFlow';
 
 /**
- * Picks one of the org's imported contact lists for a campaign (the candidate
+ * Picks one of the org's imported contact lists for a prospectSearch (the prospect
  * source pool, or the closed-won wins list the ICP is derived from).
  *
  * Replaces the old raw-id text inputs: the user selects a real list instead of
@@ -123,7 +123,7 @@ export function SourcePicker({
 
   // After an in-context import completes, refresh the dropdown and auto-select
   // the freshly-created list (matched by its `csv:upload:{syncRunId}` source) so
-  // the user lands back on the campaign with the source already chosen.
+  // the user lands back on the prospectSearch with the source already chosen.
   async function onImported(result: CsvImportResultInfo): Promise<void> {
     if (result.status.status !== 'completed') return;
     try {
@@ -164,7 +164,7 @@ export function SourcePicker({
 
       {state.kind === 'error' ? (
         // Degrade gracefully: surface the error but keep the field usable as a
-        // disabled "None" so the campaign can still start without a source.
+        // disabled "None" so the prospectSearch can still start without a source.
         <div className="flex items-start gap-2 rounded-md border border-amber-300/50 bg-amber-100/40 px-3 py-2 text-xs text-amber-900 dark:bg-amber-900/20 dark:text-amber-200">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>Couldn&apos;t load contact lists. You can still continue without one.</span>
@@ -259,7 +259,7 @@ export function SourcePicker({
                 </div>
                 <p className="mb-4 text-xs text-muted-foreground">
                   We&apos;ll import into a new list and select it here — your
-                  campaign stays as-is.
+                  prospectSearch stays as-is.
                 </p>
                 <CsvImportFlow
                   onComplete={(r) => void onImported(r)}

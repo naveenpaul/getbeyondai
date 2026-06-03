@@ -31,8 +31,8 @@ import { CredentialManager } from './credential-manager';
  *                                       encrypted; 201 { id, status:'connected' }
  *   GET  /connectors/apollo/account  → { connected, status? }
  *
- * Once connected, campaigns auto-discover companies from the derived ICP via
- * Apollo Organization Search (see campaign.worker buildSourcingProvider).
+ * Once connected, prospect searches auto-discover companies from the derived ICP via
+ * Apollo Organization Search (see prospect-search.worker buildSourcingProvider).
  *
  * The adapter is injected (not the module singleton) so unit tests can stub
  * `ping` without hitting Apollo. The key is validated here but only ever
@@ -129,7 +129,7 @@ export class ApolloConnectController {
 
     const creds: DecryptedCredentials = { apiKey: parsed.data.apiKey };
     // Validate before persisting so the user gets immediate feedback on a bad
-    // key rather than a silent failure at the first campaign run.
+    // key rather than a silent failure at the first prospect search run.
     const ping = await this.adapter.ping(creds);
     if (!ping.ok) {
       throw new BadRequestException(

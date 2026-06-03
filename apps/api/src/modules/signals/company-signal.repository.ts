@@ -22,7 +22,7 @@ import { isKnownSignal } from './signal-definition';
 
 /** A signal observation to persist. `value`/`citationId`/`detectedAt` optional. */
 export interface SignalObservation {
-  candidateId: string;
+  prospectId: string;
   key: string;
   status: SignalStatus;
   source: SignalSource;
@@ -64,7 +64,7 @@ export function validateSignalObservation(obs: SignalObservation): void {
 
 /**
  * Upsert one signal observation for a company. Idempotent on
- * `(candidateId, key)` — re-evaluation UPDATES the row (refreshing `status`,
+ * `(prospectId, key)` — re-evaluation UPDATES the row (refreshing `status`,
  * `value`, `evaluatedAt`) rather than appending a duplicate. That is what makes
  * the "signals get refreshed later / monitor" loop work without row explosion.
  *
@@ -88,8 +88,8 @@ export async function upsertCompanySignal(
   };
 
   return prisma.companySignal.upsert({
-    where: { candidateId_key: { candidateId: obs.candidateId, key: obs.key } },
-    create: { candidateId: obs.candidateId, key: obs.key, ...data },
+    where: { prospectId_key: { prospectId: obs.prospectId, key: obs.key } },
+    create: { prospectId: obs.prospectId, key: obs.key, ...data },
     update: data,
   });
 }
@@ -97,10 +97,10 @@ export async function upsertCompanySignal(
 /** All signals observed for a candidate, newest evaluation first. */
 export async function listCompanySignals(
   prisma: PrismaClient,
-  candidateId: string,
+  prospectId: string,
 ): Promise<CompanySignal[]> {
   return prisma.companySignal.findMany({
-    where: { candidateId },
+    where: { prospectId },
     orderBy: { evaluatedAt: 'desc' },
   });
 }

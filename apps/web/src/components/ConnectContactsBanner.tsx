@@ -7,10 +7,10 @@ import { Button } from '@/components/ui/button';
 import { getSnovStatus, getZoomInfoStatus } from '@/lib/api-client';
 
 /**
- * Contact-sources nudge for the campaigns home.
+ * Contact-sources nudge for the prospectSearches home.
  *
  * Discovery (Apollo) finds + ranks companies, but to surface the actual PEOPLE
- * to reach out to a campaign needs a contact connector (Snov or ZoomInfo). This
+ * to reach out to a prospectSearch needs a contact connector (Snov or ZoomInfo). This
  * banner makes that explicit: without one, ranked companies come back with zero
  * contacts. Source-agnostic — connecting either is enough. Hides on any error
  * (non-critical UI over the composer).
@@ -62,8 +62,8 @@ export function ConnectContactsBanner(): React.JSX.Element | null {
           )}
           <span className="text-foreground">
             {connected
-              ? `${state.names.join(' + ')} connected — campaigns surface contacts + verified emails at your matched companies.`
-              : 'Connect Snov or ZoomInfo to surface the people to reach out to — without one, campaigns rank companies but find no contacts.'}
+              ? `${state.names.join(' + ')} connected — prospectSearches surface contacts + verified emails at your matched companies.`
+              : 'Connect Snov or ZoomInfo to surface the people to reach out to — without one, prospectSearches rank companies but find no contacts.'}
           </span>
         </div>
         {connected ? null : (

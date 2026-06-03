@@ -96,7 +96,7 @@ describe('LlmResolver', () => {
       load: async (_org, p) => (p === Provider.openai ? 'sk-openai' : null),
     });
 
-    await expect(r.resolve('org-1', 'campaign-orchestrator')).rejects.toThrow(
+    await expect(r.resolve('org-1', 'prospect-search-orchestrator')).rejects.toThrow(
       /is not a openai model/i,
     );
   });

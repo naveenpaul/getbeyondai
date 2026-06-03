@@ -30,7 +30,7 @@ import {
 
 /**
  * LLM settings HTTP surface (BYO-key configuration). Mirrors the contacts +
- * campaign controllers: AuthGuard everywhere, identity from @CurrentUser()
+ * prospect search controllers: AuthGuard everywhere, identity from @CurrentUser()
  * (never the body), Zod-validate request bodies before touching the service.
  *
  *   GET  /settings/llm                          → LlmSettingsResponse

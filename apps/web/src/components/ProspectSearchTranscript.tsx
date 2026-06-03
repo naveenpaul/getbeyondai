@@ -7,36 +7,36 @@ import {
   Loader2,
   Sparkles,
 } from 'lucide-react';
-import type { QualifiedCandidate } from '@getbeyond/shared';
+import type { QualifiedProspect } from '@getbeyond/shared';
 import { Badge } from '@/components/ui/badge';
 import { CitationChip } from '@/components/CitationChip';
 import { cn } from '@/lib/utils';
 import {
-  buildCampaignTranscript,
-  type CampaignRow,
-} from '@/lib/campaign-transcript';
-import type { CampaignEvent } from '@getbeyond/shared';
+  buildProspectSearchTranscript,
+  type ProspectSearchRow,
+} from '@/lib/prospect-search-transcript';
+import type { ProspectSearchEvent } from '@getbeyond/shared';
 
-interface CampaignTranscriptProps {
-  events: CampaignEvent[];
-  /** True once a terminal campaign event has arrived (stream closed). */
+interface ProspectSearchTranscriptProps {
+  events: ProspectSearchEvent[];
+  /** True once a terminal prospectSearch event has arrived (stream closed). */
   terminated: boolean;
 }
 
 /**
- * Live transcript for a campaign run. Purely view — it derives its rows from
- * the event array via the pure `buildCampaignTranscript` reducer, and the SSE
- * subscription lives in the page via useCampaignStream.
+ * Live transcript for a prospectSearch run. Purely view — it derives its rows from
+ * the event array via the pure `buildProspectSearchTranscript` reducer, and the SSE
+ * subscription lives in the page via useProspectSearchStream.
  *
  * Three row kinds render distinctly: phase lines (icp/sourcing narration),
- * tool lines ("running: <tool>" — the what's-being-run view), and candidate
+ * tool lines ("running: <tool>" — the what's-being-run view), and prospect
  * result cards (fitScore + cited claims).
  */
-export function CampaignTranscript({
+export function ProspectSearchTranscript({
   events,
   terminated,
-}: CampaignTranscriptProps): React.JSX.Element {
-  const { rows } = buildCampaignTranscript(events);
+}: ProspectSearchTranscriptProps): React.JSX.Element {
+  const { rows } = buildProspectSearchTranscript(events);
 
   if (rows.length === 0) {
     return (
@@ -46,7 +46,7 @@ export function CampaignTranscript({
         ) : (
           <>
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            Starting the campaign…
+            Starting the prospectSearch…
           </>
         )}
       </div>
@@ -62,7 +62,7 @@ export function CampaignTranscript({
   );
 }
 
-function TranscriptRow({ row }: { row: CampaignRow }): React.JSX.Element {
+function TranscriptRow({ row }: { row: ProspectSearchRow }): React.JSX.Element {
   switch (row.kind) {
     case 'phase':
       return (
@@ -89,10 +89,10 @@ function TranscriptRow({ row }: { row: CampaignRow }): React.JSX.Element {
           isError={row.isError}
         />
       );
-    case 'candidate':
+    case 'prospect':
       return (
-        <CandidateCard
-          candidate={row.candidate}
+        <ProspectCard
+          prospect={row.prospect}
           index={row.index}
           total={row.total}
         />
@@ -155,24 +155,24 @@ function FeedLine({
 }
 
 /**
- * A qualified candidate rendered as a result card: name + fit score, the
+ * A qualified prospect rendered as a result card: name + fit score, the
  * one-line rationale, and the cited firmographic claims. Each cited claim gets
  * a CitationChip; abstained claims render the muted "no source" tag — the
  * cite-or-abstain trust contract surfaced inline.
  */
-function CandidateCard({
-  candidate,
+function ProspectCard({
+  prospect,
   index,
   total,
 }: {
-  candidate: QualifiedCandidate;
+  prospect: QualifiedProspect;
   index: number;
   total: number;
 }): React.JSX.Element {
   // Footnote numbering deduplicated by citationId, mirroring ResearchDraftCard.
   const citationIdToIndex = new Map<string, number>();
   let nextIndex = 1;
-  for (const claim of candidate.claims) {
+  for (const claim of prospect.claims) {
     if (claim.citationId && !citationIdToIndex.has(claim.citationId)) {
       citationIdToIndex.set(claim.citationId, nextIndex++);
     }
@@ -183,16 +183,16 @@ function CandidateCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-baseline gap-x-2">
-            <span className="font-medium text-foreground">{candidate.name}</span>
-            {candidate.domain ? (
+            <span className="font-medium text-foreground">{prospect.name}</span>
+            {prospect.domain ? (
               <span className="truncate font-mono text-xs text-muted-foreground">
-                {candidate.domain}
+                {prospect.domain}
               </span>
             ) : null}
           </div>
-          {candidate.linkedinUrl ? (
+          {prospect.linkedinUrl ? (
             <a
-              href={candidate.linkedinUrl}
+              href={prospect.linkedinUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs text-primary underline-offset-2 hover:underline"
@@ -202,22 +202,22 @@ function CandidateCard({
           ) : null}
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
-          <FitScore score={candidate.fitScore} />
+          <FitScore score={prospect.fitScore} />
           <span className="text-[11px] tabular-nums text-muted-foreground">
             {index + 1} of {total}
           </span>
         </div>
       </div>
 
-      {candidate.rationale ? (
+      {prospect.rationale ? (
         <p className="mt-2 text-sm leading-relaxed text-foreground">
-          {candidate.rationale}
+          {prospect.rationale}
         </p>
       ) : null}
 
-      {candidate.claims.length > 0 ? (
+      {prospect.claims.length > 0 ? (
         <ul className="mt-3 space-y-1.5 text-sm">
-          {candidate.claims.map((claim) => {
+          {prospect.claims.map((claim) => {
             const idx = claim.citationId
               ? citationIdToIndex.get(claim.citationId)
               : undefined;
@@ -235,7 +235,7 @@ function CandidateCard({
         </ul>
       ) : null}
 
-      <CandidateContacts contacts={candidate.contacts ?? []} />
+      <ProspectContacts contacts={prospect.contacts ?? []} />
     </div>
   );
 }
@@ -244,10 +244,10 @@ function CandidateCard({
  * Stage 5 contacts sourced at a company — who to actually reach out to.
  * Source-agnostic: each contact shows its connector + email verification.
  */
-function CandidateContacts({
+function ProspectContacts({
   contacts,
 }: {
-  contacts: NonNullable<QualifiedCandidate['contacts']>;
+  contacts: NonNullable<QualifiedProspect['contacts']>;
 }): React.JSX.Element | null {
   if (contacts.length === 0) return null;
   return (

@@ -3,37 +3,37 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
-import type { CreateCampaignRequest } from '@getbeyond/shared';
+import type { CreateProspectSearchRequest } from '@getbeyond/shared';
 import { Button } from '@/components/ui/button';
 import { SourcePicker } from '@/components/SourcePicker';
-import { ApiError, createCampaign } from '@/lib/api-client';
+import { ApiError, createProspectSearch } from '@/lib/api-client';
 import { useIdentity } from '@/lib/use-identity';
 
 /**
- * The "start a campaign" chatbox. The user types the goal in natural language;
- * on submit we POST a CreateCampaignRequest and route to the campaign's chat
+ * The "start a prospectSearch" chatbox. The user types the goal in natural language;
+ * on submit we POST a CreateProspectSearchRequest and route to the prospectSearch's chat
  * workspace, where the SSE stream renders live.
  *
- * Chat-first: the goal is the only required field. A campaign starts with just
+ * Chat-first: the goal is the only required field. A prospectSearch starts with just
  * the goal (and optionally a closed-won wins list to point the ICP at) — it
- * derives + shows the ICP and then prompts for a source. The candidate source
+ * derives + shows the ICP and then prompts for a source. The prospect source
  * is attached later in the Prospects workspace, not here, to keep the composer
  * a single calm input. Lists are picked, never pasted as raw ids.
  *
  * Two visual modes:
  *  - `variant="hero"` — the prominent home-screen composer (large textarea).
- *  - `variant="inline"` — the compact form on /campaigns/new.
+ *  - `variant="inline"` — the compact form on /prospects/new.
  */
 
-interface CampaignComposerProps {
+interface ProspectSearchComposerProps {
   variant?: 'hero' | 'inline';
   autoFocus?: boolean;
 }
 
-export function CampaignComposer({
+export function ProspectSearchComposer({
   variant = 'hero',
   autoFocus = false,
-}: CampaignComposerProps): React.JSX.Element {
+}: ProspectSearchComposerProps): React.JSX.Element {
   const router = useRouter();
   const { status } = useIdentity();
   const [goal, setGoal] = useState('');
@@ -51,17 +51,17 @@ export function CampaignComposer({
     setSubmitting(true);
     setError(null);
 
-    const payload: CreateCampaignRequest = {
+    const payload: CreateProspectSearchRequest = {
       goal: goal.trim(),
-      // The candidate source is attached later in the Prospects workspace, not
+      // The prospect source is attached later in the Prospects workspace, not
       // from the composer — start with the goal (+ optional wins list) only.
       sourcing: null,
       winsListId,
     };
 
     try {
-      const { campaignId } = await createCampaign(payload);
-      router.push(`/campaigns/${encodeURIComponent(campaignId)}`);
+      const { prospectSearchId } = await createProspectSearch(payload);
+      router.push(`/prospects/${encodeURIComponent(prospectSearchId)}`);
     } catch (err) {
       setSubmitting(false);
       setError(
@@ -105,7 +105,7 @@ export function CampaignComposer({
         </div>
         <div className="mt-3 flex items-center justify-between gap-3">
           <p className="text-xs text-muted-foreground">
-            Derives your ICP; add a source to find candidates and rank them with
+            Derives your ICP; add a source to find prospects and rank them with
             cited signals.
           </p>
           <Button

@@ -1,84 +1,84 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { CampaignEvent, CampaignEventType } from '@getbeyond/shared';
-import { buildCampaignStreamUrl } from './api-client';
+import type { ProspectSearchEvent, ProspectSearchEventType } from '@getbeyond/shared';
+import { buildProspectSearchStreamUrl } from './api-client';
 
 /**
- * SSE consumer for a campaign's run stream (GET /campaigns/:id/stream).
+ * SSE consumer for a prospectSearch's run stream (GET /prospect-searches/:id/stream).
  *
- * Mirrors useAgentStream, but the campaign stream carries a different event
- * union (CampaignEvent — phases + `tool_activity` wrapping a RunEvent) with
+ * Mirrors useAgentStream, but the prospectSearch stream carries a different event
+ * union (ProspectSearchEvent — phases + `tool_activity` wrapping a RunEvent) with
  * its own terminal set, so it can't reuse the RunEvent-typed agent hook.
  *
- * Opens an EventSource against the campaign stream URL and accumulates
- * CampaignEvents until a terminal one (`campaign_completed` / `campaign_failed`)
+ * Opens an EventSource against the prospectSearch stream URL and accumulates
+ * ProspectSearchEvents until a terminal one (`search_completed` / `search_failed`)
  * arrives, then closes. Browser EventSource auto-reconnects on transient
  * errors; we don't re-implement backoff. Events are de-duplicated by a stable
  * key so a reconnect-replay never double-renders a row.
  */
 
-export type CampaignConnectionState =
+export type ProspectSearchConnectionState =
   | 'connecting'
   | 'open'
   | 'closed'
   | 'error';
 
-interface UseCampaignStreamArgs {
-  /** Campaign id. Pass null to skip subscribing (e.g. before create). */
-  campaignId: string | null;
+interface UseProspectSearchStreamArgs {
+  /** ProspectSearch id. Pass null to skip subscribing (e.g. before create). */
+  prospectSearchId: string | null;
 }
 
-interface UseCampaignStreamResult {
-  events: CampaignEvent[];
-  connectionState: CampaignConnectionState;
+interface UseProspectSearchStreamResult {
+  events: ProspectSearchEvent[];
+  connectionState: ProspectSearchConnectionState;
   terminated: boolean;
-  last: CampaignEvent | null;
+  last: ProspectSearchEvent | null;
 }
 
-// Every CampaignEvent type the API emits. EventSource dispatches by the SSE
+// Every ProspectSearchEvent type the API emits. EventSource dispatches by the SSE
 // `event:` field, which carries the discriminant `type`, so we attach one
 // listener per type.
-const HANDLED_TYPES: readonly CampaignEventType[] = [
-  'campaign_started',
+const HANDLED_TYPES: readonly ProspectSearchEventType[] = [
+  'search_started',
   'icp_derived',
   'sourcing_started',
   'sourcing_completed',
-  'candidate_qualified',
-  'campaign_completed',
-  'campaign_failed',
+  'prospect_qualified',
+  'search_completed',
+  'search_failed',
   'tool_activity',
 ];
 
 // Terminal event types: when one arrives we stop listening and close the stream.
-// Defined locally (typed against the shared CampaignEventType union, so it can't
+// Defined locally (typed against the shared ProspectSearchEventType union, so it can't
 // drift from the contract) rather than importing the shared runtime Set —
 // @getbeyond/shared is a CommonJS build, and importing a runtime value from it
 // into a client module trips Next's React Fast Refresh ("Cannot use 'import.meta'
 // outside a module"). All other shared usage here is type-only and erased.
-const TERMINAL_TYPES: ReadonlySet<CampaignEventType> = new Set([
-  'campaign_completed',
-  'campaign_failed',
+const TERMINAL_TYPES: ReadonlySet<ProspectSearchEventType> = new Set([
+  'search_completed',
+  'search_failed',
 ]);
 
-export function useCampaignStream({
-  campaignId,
-}: UseCampaignStreamArgs): UseCampaignStreamResult {
-  const [events, setEvents] = useState<CampaignEvent[]>([]);
+export function useProspectSearchStream({
+  prospectSearchId,
+}: UseProspectSearchStreamArgs): UseProspectSearchStreamResult {
+  const [events, setEvents] = useState<ProspectSearchEvent[]>([]);
   const [connectionState, setConnectionState] =
-    useState<CampaignConnectionState>('connecting');
+    useState<ProspectSearchConnectionState>('connecting');
   const [terminated, setTerminated] = useState(false);
   const deliveredRef = useRef(new Set<string>());
 
   useEffect(() => {
-    if (!campaignId) return;
+    if (!prospectSearchId) return;
 
     deliveredRef.current = new Set();
     setEvents([]);
     setTerminated(false);
     setConnectionState('connecting');
 
-    const es = new EventSource(buildCampaignStreamUrl(campaignId), {
+    const es = new EventSource(buildProspectSearchStreamUrl(prospectSearchId), {
       withCredentials: true,
     });
 
@@ -92,9 +92,9 @@ export function useCampaignStream({
     };
 
     const handle = (event: MessageEvent): void => {
-      let parsed: CampaignEvent;
+      let parsed: ProspectSearchEvent;
       try {
-        parsed = JSON.parse(event.data) as CampaignEvent;
+        parsed = JSON.parse(event.data) as ProspectSearchEvent;
       } catch {
         return;
       }
@@ -117,7 +117,7 @@ export function useCampaignStream({
     return () => {
       es.close();
     };
-  }, [campaignId]);
+  }, [prospectSearchId]);
 
   return {
     events,

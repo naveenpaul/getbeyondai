@@ -32,11 +32,11 @@
       "import": "./dist/sdr-drafter-contracts.js",
       "default": "./dist/sdr-drafter-contracts.js"
     },
-    "./campaign-contracts": {
-      "types": "./dist/campaign-contracts.d.ts",
-      "require": "./dist/campaign-contracts.js",
-      "import": "./dist/campaign-contracts.js",
-      "default": "./dist/campaign-contracts.js"
+    "./prospect-search-contracts": {
+      "types": "./dist/prospect-search-contracts.d.ts",
+      "require": "./dist/prospect-search-contracts.js",
+      "import": "./dist/prospect-search-contracts.js",
+      "default": "./dist/prospect-search-contracts.js"
     },
     "./llm-settings-contracts": {
       "types": "./dist/llm-settings-contracts.d.ts",

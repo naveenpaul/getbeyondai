@@ -156,7 +156,7 @@ export class ContactsController {
   }
 
   /**
-   * The org's contact lists, newest first — powers the campaign composer's
+   * The org's contact lists, newest first — powers the prospect search composer's
    * source/wins pickers (so users select a list instead of pasting an id).
    * CSV-imported and HubSpot-synced lists both appear, tagged by `source`.
    */

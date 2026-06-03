@@ -14,7 +14,7 @@ import type { NextConfig } from 'next';
  *
  * Rule: import only TYPES from `@getbeyond/shared` here. If you need one of its
  * (tiny) runtime values, redefine it locally typed against the shared union —
- * see TERMINAL_TYPES in use-campaign-stream.ts. Don't import shared runtime
+ * see TERMINAL_TYPES in use-prospect-search-stream.ts. Don't import shared runtime
  * values into client modules until shared ships a real ESM/dual build.
  *
  * No remote-image config, no experimental flags — keep the surface boring.

@@ -2,46 +2,46 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import type { PrismaService } from '../../common/prisma/prisma.service';
 import type { QueueService } from '../queue/queue.service';
-import { CampaignService, deriveTitle } from './campaign.service';
-import { CAMPAIGN_RUN_QUEUE } from './campaign.worker';
-import { CAMPAIGN_TEAMMATE, ICP_PHASE } from './campaign-orchestrator';
+import { ProspectSearchService, deriveTitle } from './prospect-search.service';
+import { PROSPECT_SEARCH_RUN_QUEUE } from './prospect-search.worker';
+import { PROSPECT_SEARCH_TEAMMATE, ICP_PHASE } from './prospect-search-orchestrator';
 
 /**
- * CampaignService unit tests with a mocked PrismaService + QueueService. No DB.
+ * ProspectSearchService unit tests with a mocked PrismaService + QueueService. No DB.
  * Explicit vitest imports — `globals: false`.
  */
 
 function makeService(overrides?: {
-  campaign?: Partial<Record<string, ReturnType<typeof vi.fn>>>;
+  prospectSearch?: Partial<Record<string, ReturnType<typeof vi.fn>>>;
   draft?: Partial<Record<string, ReturnType<typeof vi.fn>>>;
   agentRun?: Partial<Record<string, ReturnType<typeof vi.fn>>>;
   send?: ReturnType<typeof vi.fn>;
 }) {
-  const campaignCreate = overrides?.campaign?.create ?? vi.fn();
-  const campaignFindMany = overrides?.campaign?.findMany ?? vi.fn();
-  const campaignFindUnique = overrides?.campaign?.findUnique ?? vi.fn();
+  const prospectSearchCreate = overrides?.prospectSearch?.create ?? vi.fn();
+  const prospectSearchFindMany = overrides?.prospectSearch?.findMany ?? vi.fn();
+  const prospectSearchFindUnique = overrides?.prospectSearch?.findUnique ?? vi.fn();
   const draftFindMany = overrides?.draft?.findMany ?? vi.fn(async () => []);
   const agentRunFindFirst =
     overrides?.agentRun?.findFirst ?? vi.fn(async () => null);
   const send = overrides?.send ?? vi.fn(async () => undefined);
 
   const prisma = {
-    campaign: {
-      create: campaignCreate,
-      findMany: campaignFindMany,
-      findUnique: campaignFindUnique,
+    prospectSearch: {
+      create: prospectSearchCreate,
+      findMany: prospectSearchFindMany,
+      findUnique: prospectSearchFindUnique,
     },
     draft: { findMany: draftFindMany },
     agentRun: { findFirst: agentRunFindFirst },
   } as unknown as PrismaService;
 
   const queue = { send } as unknown as QueueService;
-  const service = new CampaignService(prisma, queue);
+  const service = new ProspectSearchService(prisma, queue);
   return {
     service,
-    campaignCreate,
-    campaignFindMany,
-    campaignFindUnique,
+    prospectSearchCreate,
+    prospectSearchFindMany,
+    prospectSearchFindUnique,
     draftFindMany,
     agentRunFindFirst,
     send,
@@ -50,14 +50,14 @@ function makeService(overrides?: {
 
 const NOW = new Date('2026-06-01T12:00:00.000Z');
 
-describe('CampaignService.create', () => {
-  it('persists a running Campaign and enqueues the orchestrator job', async () => {
-    const campaignCreate = vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+describe('ProspectSearchService.create', () => {
+  it('persists a running ProspectSearch and enqueues the orchestrator job', async () => {
+    const prospectSearchCreate = vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
       id: 'camp-new',
       ...data,
     }));
     const send = vi.fn(async () => undefined);
-    const { service } = makeService({ campaign: { create: campaignCreate }, send });
+    const { service } = makeService({ prospectSearch: { create: prospectSearchCreate }, send });
 
     const result = await service.create('org-1', 'user-1', {
       goal: 'Find lookalikes of our wins',
@@ -66,10 +66,10 @@ describe('CampaignService.create', () => {
       budgetCents: 500,
     });
 
-    expect(result).toEqual({ campaignId: 'camp-new', status: 'running' });
+    expect(result).toEqual({ prospectSearchId: 'camp-new', status: 'running' });
 
-    // Campaign persisted with session identity, status running, derived title.
-    expect(campaignCreate).toHaveBeenCalledWith({
+    // ProspectSearch persisted with session identity, status running, derived title.
+    expect(prospectSearchCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
         orgId: 'org-1',
         createdBy: 'user-1',
@@ -80,11 +80,11 @@ describe('CampaignService.create', () => {
       }),
     });
 
-    // Job enqueued on the campaign-run queue with the campaignId.
+    // Job enqueued on the prospect-search-run queue with the prospectSearchId.
     expect(send).toHaveBeenCalledWith(
-      CAMPAIGN_RUN_QUEUE,
+      PROSPECT_SEARCH_RUN_QUEUE,
       expect.objectContaining({
-        campaignId: 'camp-new',
+        prospectSearchId: 'camp-new',
         orgId: 'org-1',
         triggeredBy: 'user-1',
         goal: 'Find lookalikes of our wins',
@@ -96,27 +96,27 @@ describe('CampaignService.create', () => {
   });
 
   it('defaults winsListId to null when omitted', async () => {
-    const campaignCreate = vi.fn(async () => ({ id: 'c' }));
+    const prospectSearchCreate = vi.fn(async () => ({ id: 'c' }));
     const send = vi.fn(async () => undefined);
-    const { service } = makeService({ campaign: { create: campaignCreate }, send });
+    const { service } = makeService({ prospectSearch: { create: prospectSearchCreate }, send });
 
     await service.create('org-1', 'user-1', {
       goal: 'g',
       sourcing: { provider: 'contact_list', listId: 'l' },
     });
 
-    expect(campaignCreate).toHaveBeenCalledWith({
+    expect(prospectSearchCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({ winsListId: null }),
     });
     expect(send).toHaveBeenCalledWith(
-      CAMPAIGN_RUN_QUEUE,
+      PROSPECT_SEARCH_RUN_QUEUE,
       expect.objectContaining({ winsListId: null }),
     );
   });
 
-  it('persists sourcing + budgetCents on the campaign row (DB is the source of truth, not just the job)', async () => {
-    const campaignCreate = vi.fn(async () => ({ id: 'c' }));
-    const { service } = makeService({ campaign: { create: campaignCreate } });
+  it('persists sourcing + budgetCents on the prospectSearch row (DB is the source of truth, not just the job)', async () => {
+    const prospectSearchCreate = vi.fn(async () => ({ id: 'c' }));
+    const { service } = makeService({ prospectSearch: { create: prospectSearchCreate } });
 
     await service.create('org-1', 'user-1', {
       goal: 'g',
@@ -124,7 +124,7 @@ describe('CampaignService.create', () => {
       budgetCents: 750,
     });
 
-    expect(campaignCreate).toHaveBeenCalledWith({
+    expect(prospectSearchCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
         sourcing: { provider: 'contact_list', listId: 'list-9' },
         budgetCents: 750,
@@ -133,25 +133,25 @@ describe('CampaignService.create', () => {
   });
 
   it('omits sourcing + budgetCents from the row when absent (→ SQL NULL)', async () => {
-    const campaignCreate = vi.fn(async () => ({ id: 'c' }));
-    const { service } = makeService({ campaign: { create: campaignCreate } });
+    const prospectSearchCreate = vi.fn(async () => ({ id: 'c' }));
+    const { service } = makeService({ prospectSearch: { create: prospectSearchCreate } });
 
     await service.create('org-1', 'user-1', { goal: 'g' });
 
-    expect(campaignCreate).toHaveBeenCalledWith({
+    expect(prospectSearchCreate).toHaveBeenCalledWith({
       data: expect.not.objectContaining({ sourcing: expect.anything() }),
     });
-    expect(campaignCreate).toHaveBeenCalledWith({
+    expect(prospectSearchCreate).toHaveBeenCalledWith({
       data: expect.not.objectContaining({ budgetCents: expect.anything() }),
     });
   });
 });
 
-describe('CampaignService.rerun', () => {
+describe('ProspectSearchService.rerun', () => {
   const sourceRow = {
     id: 'camp-old',
     orgId: 'org-1',
-    title: 'My campaign',
+    title: 'My prospectSearch',
     goal: 'find lookalikes',
     status: 'failed',
     winsListId: 'wins-1',
@@ -162,25 +162,25 @@ describe('CampaignService.rerun', () => {
     updatedAt: NOW,
   };
 
-  it('clones the persisted config into a new campaign and enqueues it', async () => {
-    const campaignFindUnique = vi.fn(async () => sourceRow);
-    const campaignCreate = vi.fn(async () => ({ id: 'camp-new' }));
+  it('clones the persisted config into a new prospectSearch and enqueues it', async () => {
+    const prospectSearchFindUnique = vi.fn(async () => sourceRow);
+    const prospectSearchCreate = vi.fn(async () => ({ id: 'camp-new' }));
     const send = vi.fn(async () => undefined);
     const { service } = makeService({
-      campaign: { findUnique: campaignFindUnique, create: campaignCreate },
+      prospectSearch: { findUnique: prospectSearchFindUnique, create: prospectSearchCreate },
       send,
     });
 
     const result = await service.rerun('org-1', 'camp-old', 'user-runner');
 
-    expect(result).toEqual({ campaignId: 'camp-new', status: 'running' });
+    expect(result).toEqual({ prospectSearchId: 'camp-new', status: 'running' });
     // New row keeps the original title/goal/wins/sourcing/budget; the
     // re-runner (not the original creator) is recorded as createdBy.
-    expect(campaignCreate).toHaveBeenCalledWith({
+    expect(prospectSearchCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
         orgId: 'org-1',
         createdBy: 'user-runner',
-        title: 'My campaign',
+        title: 'My prospectSearch',
         goal: 'find lookalikes',
         winsListId: 'wins-1',
         sourcing: { provider: 'contact_list', listId: 'list-1' },
@@ -189,9 +189,9 @@ describe('CampaignService.rerun', () => {
       }),
     });
     expect(send).toHaveBeenCalledWith(
-      CAMPAIGN_RUN_QUEUE,
+      PROSPECT_SEARCH_RUN_QUEUE,
       expect.objectContaining({
-        campaignId: 'camp-new',
+        prospectSearchId: 'camp-new',
         winsListId: 'wins-1',
         sourcing: { provider: 'contact_list', listId: 'list-1' },
         budgetCents: 500,
@@ -199,34 +199,34 @@ describe('CampaignService.rerun', () => {
     );
   });
 
-  it('clones a campaign that had no source or budget', async () => {
-    const campaignFindUnique = vi.fn(async () => ({
+  it('clones a prospectSearch that had no source or budget', async () => {
+    const prospectSearchFindUnique = vi.fn(async () => ({
       ...sourceRow,
       sourcing: null,
       budgetCents: null,
     }));
-    const campaignCreate = vi.fn(async () => ({ id: 'camp-new2' }));
+    const prospectSearchCreate = vi.fn(async () => ({ id: 'camp-new2' }));
     const send = vi.fn(async () => undefined);
     const { service } = makeService({
-      campaign: { findUnique: campaignFindUnique, create: campaignCreate },
+      prospectSearch: { findUnique: prospectSearchFindUnique, create: prospectSearchCreate },
       send,
     });
 
     await service.rerun('org-1', 'camp-old', 'user-runner');
 
     // Null source/budget round-trips to an omitted row + null job sourcing.
-    expect(campaignCreate).toHaveBeenCalledWith({
+    expect(prospectSearchCreate).toHaveBeenCalledWith({
       data: expect.not.objectContaining({ sourcing: expect.anything() }),
     });
     expect(send).toHaveBeenCalledWith(
-      CAMPAIGN_RUN_QUEUE,
+      PROSPECT_SEARCH_RUN_QUEUE,
       expect.objectContaining({ sourcing: null }),
     );
   });
 
-  it('throws NotFoundException when the source campaign does not exist', async () => {
+  it('throws NotFoundException when the source prospectSearch does not exist', async () => {
     const { service } = makeService({
-      campaign: { findUnique: vi.fn(async () => null) },
+      prospectSearch: { findUnique: vi.fn(async () => null) },
     });
 
     await expect(service.rerun('org-1', 'missing', 'u')).rejects.toBeInstanceOf(
@@ -234,10 +234,10 @@ describe('CampaignService.rerun', () => {
     );
   });
 
-  it('rejects + does not enqueue when the campaign belongs to another org', async () => {
+  it('rejects + does not enqueue when the prospectSearch belongs to another org', async () => {
     const send = vi.fn(async () => undefined);
     const { service } = makeService({
-      campaign: {
+      prospectSearch: {
         findUnique: vi.fn(async () => ({ ...sourceRow, orgId: 'org-OTHER' })),
       },
       send,
@@ -250,9 +250,9 @@ describe('CampaignService.rerun', () => {
   });
 });
 
-describe('CampaignService.list', () => {
-  it('returns org-scoped summaries with candidate counts, newest first', async () => {
-    const campaignFindMany = vi.fn(async () => [
+describe('ProspectSearchService.list', () => {
+  it('returns org-scoped summaries with prospect counts, newest first', async () => {
+    const prospectSearchFindMany = vi.fn(async () => [
       {
         id: 'c1',
         title: 'T1',
@@ -260,14 +260,14 @@ describe('CampaignService.list', () => {
         status: 'completed',
         createdAt: NOW,
         updatedAt: NOW,
-        _count: { candidates: 3 },
+        _count: { prospects: 3 },
       },
     ]);
-    const { service } = makeService({ campaign: { findMany: campaignFindMany } });
+    const { service } = makeService({ prospectSearch: { findMany: prospectSearchFindMany } });
 
     const result = await service.list('org-1');
 
-    expect(campaignFindMany).toHaveBeenCalledWith(
+    expect(prospectSearchFindMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { orgId: 'org-1' },
         orderBy: { createdAt: 'desc' },
@@ -281,14 +281,14 @@ describe('CampaignService.list', () => {
         status: 'completed',
         createdAt: NOW.toISOString(),
         updatedAt: NOW.toISOString(),
-        candidateCount: 3,
+        prospectCount: 3,
       },
     ]);
   });
 });
 
-describe('CampaignService.detail', () => {
-  const baseCampaign = {
+describe('ProspectSearchService.detail', () => {
+  const baseProspectSearch = {
     id: 'c1',
     orgId: 'org-1',
     title: 'T',
@@ -296,8 +296,8 @@ describe('CampaignService.detail', () => {
     status: 'completed',
     createdAt: NOW,
     updatedAt: NOW,
-    _count: { candidates: 1 },
-    candidates: [
+    _count: { prospects: 1 },
+    prospects: [
       {
         name: 'Acme',
         domain: 'acme.com',
@@ -310,8 +310,8 @@ describe('CampaignService.detail', () => {
     ],
   };
 
-  it('joins candidate claims from their linked Draft + the derived ICP', async () => {
-    const campaignFindUnique = vi.fn(async () => baseCampaign);
+  it('joins prospect claims from their linked Draft + the derived ICP', async () => {
+    const prospectSearchFindUnique = vi.fn(async () => baseProspectSearch);
     const draftFindMany = vi.fn(async () => [
       {
         id: 'd1',
@@ -330,7 +330,7 @@ describe('CampaignService.detail', () => {
     const agentRunFindFirst = vi.fn(async () => ({
       inputContext: {
         phase: ICP_PHASE,
-        campaignId: 'c1',
+        prospectSearchId: 'c1',
         icp: {
           summary: 'B2B SaaS',
           keywords: ['saas'],
@@ -340,16 +340,16 @@ describe('CampaignService.detail', () => {
       },
     }));
     const { service } = makeService({
-      campaign: { findUnique: campaignFindUnique },
+      prospectSearch: { findUnique: prospectSearchFindUnique },
       draft: { findMany: draftFindMany },
       agentRun: { findFirst: agentRunFindFirst },
     });
 
     const result = await service.detail('org-1', 'c1');
 
-    expect(result.campaign.id).toBe('c1');
-    expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0]?.claims).toEqual([
+    expect(result.prospectSearch.id).toBe('c1');
+    expect(result.prospects).toHaveLength(1);
+    expect(result.prospects[0]?.claims).toEqual([
       {
         id: 'cl-1',
         text: 'A claim',
@@ -361,21 +361,21 @@ describe('CampaignService.detail', () => {
     ]);
     expect(result.icp?.summary).toBe('B2B SaaS');
 
-    // ICP lookup is org-scoped + filtered to this campaign's derive-icp run.
+    // ICP lookup is org-scoped + filtered to this prospectSearch's derive-icp run.
     expect(agentRunFindFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           orgId: 'org-1',
-          teammate: CAMPAIGN_TEAMMATE,
+          teammate: PROSPECT_SEARCH_TEAMMATE,
         }),
       }),
     );
   });
 
-  it('surfaces Stage 5 contacts on the candidate (source-agnostic)', async () => {
-    const campaignWithContacts = {
-      ...baseCampaign,
-      candidates: [
+  it('surfaces Stage 5 contacts on the prospect (source-agnostic)', async () => {
+    const prospectSearchWithContacts = {
+      ...baseProspectSearch,
+      prospects: [
         {
           name: 'Acme',
           domain: 'acme.com',
@@ -400,13 +400,13 @@ describe('CampaignService.detail', () => {
       ],
     };
     const { service } = makeService({
-      campaign: { findUnique: vi.fn(async () => campaignWithContacts) },
+      prospectSearch: { findUnique: vi.fn(async () => prospectSearchWithContacts) },
       draft: { findMany: vi.fn(async () => []) },
       agentRun: { findFirst: vi.fn(async () => null) },
     });
 
     const result = await service.detail('org-1', 'c1');
-    expect(result.candidates[0]?.contacts).toEqual([
+    expect(result.prospects[0]?.contacts).toEqual([
       {
         firstName: 'Dana',
         lastName: 'Reed',
@@ -420,7 +420,7 @@ describe('CampaignService.detail', () => {
   });
 
   it('maps a claim with no citation to citationUrl null', async () => {
-    const campaignFindUnique = vi.fn(async () => baseCampaign);
+    const prospectSearchFindUnique = vi.fn(async () => baseProspectSearch);
     const draftFindMany = vi.fn(async () => [
       {
         id: 'd1',
@@ -437,19 +437,19 @@ describe('CampaignService.detail', () => {
       },
     ]);
     const { service } = makeService({
-      campaign: { findUnique: campaignFindUnique },
+      prospectSearch: { findUnique: prospectSearchFindUnique },
       draft: { findMany: draftFindMany },
       agentRun: { findFirst: vi.fn(async () => null) },
     });
 
     const result = await service.detail('org-1', 'c1');
-    expect(result.candidates[0]?.claims[0]?.citationUrl).toBeNull();
-    expect(result.candidates[0]?.claims[0]?.abstained).toBe(true);
+    expect(result.prospects[0]?.claims[0]?.citationUrl).toBeNull();
+    expect(result.prospects[0]?.claims[0]?.abstained).toBe(true);
   });
 
   it('returns null ICP when no derive-icp AgentRun exists yet', async () => {
     const { service } = makeService({
-      campaign: { findUnique: vi.fn(async () => baseCampaign) },
+      prospectSearch: { findUnique: vi.fn(async () => baseProspectSearch) },
       draft: { findMany: vi.fn(async () => []) },
       agentRun: { findFirst: vi.fn(async () => null) },
     });
@@ -457,16 +457,16 @@ describe('CampaignService.detail', () => {
     const result = await service.detail('org-1', 'c1');
     expect(result.icp).toBeNull();
     // The draft had no claims joined → empty claims array, not undefined.
-    expect(result.candidates[0]?.claims).toEqual([]);
+    expect(result.prospects[0]?.claims).toEqual([]);
   });
 
   it('returns null ICP when the AgentRun inputContext has no icp object', async () => {
     const { service } = makeService({
-      campaign: { findUnique: vi.fn(async () => baseCampaign) },
+      prospectSearch: { findUnique: vi.fn(async () => baseProspectSearch) },
       draft: { findMany: vi.fn(async () => []) },
       agentRun: {
         findFirst: vi.fn(async () => ({
-          inputContext: { phase: ICP_PHASE, campaignId: 'c1' },
+          inputContext: { phase: ICP_PHASE, prospectSearchId: 'c1' },
         })),
       },
     });
@@ -475,9 +475,9 @@ describe('CampaignService.detail', () => {
     expect(result.icp).toBeNull();
   });
 
-  it('throws NotFoundException when the campaign does not exist', async () => {
+  it('throws NotFoundException when the prospectSearch does not exist', async () => {
     const { service } = makeService({
-      campaign: { findUnique: vi.fn(async () => null) },
+      prospectSearch: { findUnique: vi.fn(async () => null) },
     });
 
     await expect(service.detail('org-1', 'missing')).rejects.toBeInstanceOf(
@@ -485,10 +485,10 @@ describe('CampaignService.detail', () => {
     );
   });
 
-  it('throws ForbiddenException when the campaign belongs to another org (cross-org isolation)', async () => {
+  it('throws ForbiddenException when the prospectSearch belongs to another org (cross-org isolation)', async () => {
     const { service } = makeService({
-      campaign: {
-        findUnique: vi.fn(async () => ({ ...baseCampaign, orgId: 'org-OTHER' })),
+      prospectSearch: {
+        findUnique: vi.fn(async () => ({ ...baseProspectSearch, orgId: 'org-OTHER' })),
       },
     });
 
@@ -497,10 +497,10 @@ describe('CampaignService.detail', () => {
     );
   });
 
-  it('handles a candidate with no draftId (no claims join attempted for it)', async () => {
-    const campaign = {
-      ...baseCampaign,
-      candidates: [
+  it('handles a prospect with no draftId (no claims join attempted for it)', async () => {
+    const prospectSearch = {
+      ...baseProspectSearch,
+      prospects: [
         {
           name: 'NoDraft',
           domain: null,
@@ -514,13 +514,13 @@ describe('CampaignService.detail', () => {
     };
     const draftFindMany = vi.fn(async () => []);
     const { service } = makeService({
-      campaign: { findUnique: vi.fn(async () => campaign) },
+      prospectSearch: { findUnique: vi.fn(async () => prospectSearch) },
       draft: { findMany: draftFindMany },
       agentRun: { findFirst: vi.fn(async () => null) },
     });
 
     const result = await service.detail('org-1', 'c1');
-    expect(result.candidates[0]?.claims).toEqual([]);
+    expect(result.prospects[0]?.claims).toEqual([]);
     // No draft ids → draft.findMany short-circuits (not called).
     expect(draftFindMany).not.toHaveBeenCalled();
   });
@@ -538,7 +538,7 @@ describe('deriveTitle', () => {
     expect(title.endsWith('…')).toBe(true);
   });
 
-  it('falls back to "Untitled campaign" for an empty goal', () => {
-    expect(deriveTitle('   ')).toBe('Untitled campaign');
+  it('falls back to "Untitled prospectSearch" for an empty goal', () => {
+    expect(deriveTitle('   ')).toBe('Untitled prospectSearch');
   });
 });

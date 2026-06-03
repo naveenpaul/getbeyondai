@@ -3,23 +3,23 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowRight, Loader2, Plus } from 'lucide-react';
-import type { CampaignStatus, CampaignSummary } from '@getbeyond/shared';
+import type { ProspectSearchStatus, ProspectSearchSummary } from '@getbeyond/shared';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { CampaignComposer } from '@/components/CampaignComposer';
+import { ProspectSearchComposer } from '@/components/ProspectSearchComposer';
 import { ConnectApolloBanner } from '@/components/ConnectApolloBanner';
 import { ConnectContactsBanner } from '@/components/ConnectContactsBanner';
-import { ApiError, listCampaigns } from '@/lib/api-client';
-import { formatRelativeTime } from '@/lib/campaign-transcript';
+import { ApiError, listProspectSearches } from '@/lib/api-client';
+import { formatRelativeTime } from '@/lib/prospect-search-transcript';
 import { useIdentity } from '@/lib/use-identity';
 
 /**
  * Home page.
  *
  * Unauthenticated visitors see the marketing card with a "sign in" CTA.
- * Authenticated users land on the campaigns workspace: a prominent "start a
- * campaign" composer plus the list of their campaigns. Opening a campaign
- * routes to its chat workspace at /campaigns/[id].
+ * Authenticated users land on the prospectSearches workspace: a prominent "start a
+ * prospectSearch" composer plus the list of their prospectSearches. Opening a prospectSearch
+ * routes to its chat workspace at /prospects/[id].
  */
 export default function HomePage(): React.JSX.Element {
   const { status, identity } = useIdentity();
@@ -36,7 +36,7 @@ export default function HomePage(): React.JSX.Element {
     return <UnauthenticatedHome />;
   }
 
-  return <CampaignsHome />;
+  return <ProspectSearchesHome />;
 }
 
 function UnauthenticatedHome(): React.JSX.Element {
@@ -82,15 +82,15 @@ function UnauthenticatedHome(): React.JSX.Element {
 
 type ListState =
   | { status: 'loading' }
-  | { status: 'ready'; items: CampaignSummary[] }
+  | { status: 'ready'; items: ProspectSearchSummary[] }
   | { status: 'error'; message: string };
 
-function CampaignsHome(): React.JSX.Element {
+function ProspectSearchesHome(): React.JSX.Element {
   const [state, setState] = useState<ListState>({ status: 'loading' });
 
   useEffect(() => {
     let cancelled = false;
-    listCampaigns()
+    listProspectSearches()
       .then((res) => {
         if (!cancelled) setState({ status: 'ready', items: res.items });
       })
@@ -121,7 +121,7 @@ function CampaignsHome(): React.JSX.Element {
         </p>
       </header>
 
-      <CampaignComposer variant="hero" autoFocus />
+      <ProspectSearchComposer variant="hero" autoFocus />
 
       <ConnectApolloBanner />
       <ConnectContactsBanner />
@@ -132,13 +132,13 @@ function CampaignsHome(): React.JSX.Element {
             Your searches
           </h2>
         </div>
-        <CampaignList state={state} />
+        <ProspectSearchList state={state} />
       </section>
     </main>
   );
 }
 
-function CampaignList({ state }: { state: ListState }): React.JSX.Element {
+function ProspectSearchList({ state }: { state: ListState }): React.JSX.Element {
   if (state.status === 'loading') {
     return (
       <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
@@ -175,47 +175,47 @@ function CampaignList({ state }: { state: ListState }): React.JSX.Element {
     <ul className="divide-y rounded-lg border">
       {state.items.map((c) => (
         <li key={c.id}>
-          <CampaignRow campaign={c} />
+          <ProspectSearchRow prospectSearch={c} />
         </li>
       ))}
     </ul>
   );
 }
 
-function CampaignRow({
-  campaign,
+function ProspectSearchRow({
+  prospectSearch,
 }: {
-  campaign: CampaignSummary;
+  prospectSearch: ProspectSearchSummary;
 }): React.JSX.Element {
   return (
     <Link
-      href={`/campaigns/${encodeURIComponent(campaign.id)}`}
+      href={`/prospects/${encodeURIComponent(prospectSearch.id)}`}
       className="group flex items-center justify-between gap-4 px-4 py-3 transition-colors hover:bg-muted/50"
     >
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <span className="truncate font-medium text-foreground">
-            {campaign.title}
+            {prospectSearch.title}
           </span>
-          <StatusBadge status={campaign.status} />
+          <StatusBadge status={prospectSearch.status} />
         </div>
         <p className="mt-0.5 truncate text-sm text-muted-foreground">
-          {campaign.goal}
+          {prospectSearch.goal}
         </p>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-0.5 text-xs text-muted-foreground">
         <span className="tabular-nums">
-          {campaign.candidateCount}{' '}
-          {campaign.candidateCount === 1 ? 'prospect' : 'prospects'}
+          {prospectSearch.prospectCount}{' '}
+          {prospectSearch.prospectCount === 1 ? 'prospect' : 'prospects'}
         </span>
-        <span>{formatRelativeTime(campaign.updatedAt)}</span>
+        <span>{formatRelativeTime(prospectSearch.updatedAt)}</span>
       </div>
     </Link>
   );
 }
 
 const STATUS_VARIANT: Record<
-  CampaignStatus,
+  ProspectSearchStatus,
   'secondary' | 'success' | 'warning' | 'destructive'
 > = {
   draft: 'secondary',
@@ -224,7 +224,7 @@ const STATUS_VARIANT: Record<
   failed: 'destructive',
 };
 
-function StatusBadge({ status }: { status: CampaignStatus }): React.JSX.Element {
+function StatusBadge({ status }: { status: ProspectSearchStatus }): React.JSX.Element {
   return (
     <Badge variant={STATUS_VARIANT[status]} className="shrink-0">
       {status}

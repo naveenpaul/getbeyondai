@@ -70,7 +70,7 @@ export interface CsvImportResult {
   /**
    * The ContactList created to hold the imported contacts, or `null` when the
    * import produced zero contacts (no point in an empty list). This list is
-   * what campaigns source candidates from.
+   * what prospect searches source candidates from.
    */
   listId: string | null;
 }
@@ -169,7 +169,7 @@ export async function runCsvImport(
       }
     }
 
-    // Group the imported contacts into a ContactList so campaigns have a
+    // Group the imported contacts into a ContactList so prospect searches have a
     // candidate pool to source from. Skip when nothing was imported — an
     // empty list is just clutter. List + members are written in one
     // transaction; a failure here lands in the same catch below and marks

@@ -7,9 +7,9 @@ import { Button } from '@/components/ui/button';
 import { getApolloStatus } from '@/lib/api-client';
 
 /**
- * Apollo connection nudge for the campaigns home.
+ * Apollo connection nudge for the prospectSearches home.
  *
- * Discovery is auto: once Apollo is connected, every new campaign searches
+ * Discovery is auto: once Apollo is connected, every new prospectSearch searches
  * Apollo for companies matching the derived ICP. This banner just surfaces that
  * state and routes to Settings → Connectors to manage the key — the canonical
  * place to enter it. Self-host-only: on Cloud (available=false) it hides.

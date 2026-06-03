@@ -6,7 +6,7 @@ import {
 } from './company-signal.repository';
 
 const base: SignalObservation = {
-  candidateId: 'cand-1',
+  prospectId: 'cand-1',
   key: 'has_problem',
   status: 'present',
   source: 'research',
@@ -33,7 +33,7 @@ describe('validateSignalObservation', () => {
   it('allows a present CONNECTOR signal without a citation', () => {
     expect(() =>
       validateSignalObservation({
-        candidateId: 'c',
+        prospectId: 'c',
         key: 'recently_funded',
         status: 'present',
         source: 'connector',
@@ -44,7 +44,7 @@ describe('validateSignalObservation', () => {
   it('allows a present COMPUTED signal (reachability) without a citation', () => {
     expect(() =>
       validateSignalObservation({
-        candidateId: 'c',
+        prospectId: 'c',
         key: 'reachable_decision_maker',
         status: 'present',
         source: 'computed',
@@ -55,7 +55,7 @@ describe('validateSignalObservation', () => {
   it('allows an ABSENT research signal without a citation (nothing asserted)', () => {
     expect(() =>
       validateSignalObservation({
-        candidateId: 'c',
+        prospectId: 'c',
         key: 'has_problem',
         status: 'absent',
         source: 'research',

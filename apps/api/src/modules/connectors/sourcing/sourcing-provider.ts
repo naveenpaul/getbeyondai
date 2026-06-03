@@ -1,7 +1,7 @@
 /**
- * Sourcing abstraction (campaigns / lookalike discovery).
+ * Sourcing abstraction (prospect searches / lookalike discovery).
  *
- * A SourcingProvider produces a *candidate pool* of companies for a campaign's
+ * A SourcingProvider produces a *candidate pool* of companies for a prospect search's
  * orchestrator to qualify + rank against an ICP (derived from the user's wins).
  * It is the seam that keeps the orchestrator vendor-neutral:
  *
@@ -56,12 +56,12 @@ export interface FindCandidatesOptions {
 }
 
 /**
- * Thrown by the provider factory when a campaign's configured source can't be
+ * Thrown by the provider factory when a prospect search's configured source can't be
  * used for a benign, user-fixable reason — e.g. the org hasn't connected Apollo,
  * or its key expired / tripped the circuit breaker. The orchestrator treats this
  * as a graceful "no candidates, here's what to do" outcome (it surfaces
- * `userMessage` on the stream and completes the campaign) rather than a hard
- * `campaign_failed`. Genuinely unexpected errors (DB down) must NOT use this —
+ * `userMessage` on the stream and completes the prospect search) rather than a hard
+ * `search_failed`. Genuinely unexpected errors (DB down) must NOT use this —
  * they should bubble so pg-boss retries.
  */
 export class SourcingUnavailableError extends Error {
@@ -74,7 +74,7 @@ export class SourcingUnavailableError extends Error {
   }
 }
 
-/** Produces a candidate pool for a campaign. One instance is bound per run. */
+/** Produces a candidate pool for a prospect search. One instance is bound per run. */
 export interface SourcingProvider {
   /** Stable identifier surfaced in the connected-tools sidebar + audit log. */
   readonly name: string;
