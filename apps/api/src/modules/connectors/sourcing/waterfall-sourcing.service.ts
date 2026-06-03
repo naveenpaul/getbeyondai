@@ -32,8 +32,22 @@ import type { ConnectorKind, NormalizedContact } from '@getbeyond/shared';
 /** A connector bound to creds + breaker hooks, ready to stream one domain. */
 export interface WaterfallConnector {
   readonly kind: ConnectorKind;
+  /** ConnectorAccount.id — carried onto each contact for upsert provenance. */
+  readonly accountId: string;
   /** Stream contacts for a single company domain (mirrors syncContacts, bound). */
   sourceForDomain(domain: string): AsyncIterable<NormalizedContact>;
+}
+
+/**
+ * A merged contact plus the connector that won it — the provenance the upsert
+ * layer needs (`sourceKind` sets the precedence tier, `sourceAccountId` is the
+ * `ContactSource`). The waterfall merges across connectors, so each kept contact
+ * remembers which connector's record survived.
+ */
+export interface SourcedContact {
+  contact: NormalizedContact;
+  sourceKind: ConnectorKind;
+  sourceAccountId: string;
 }
 
 export interface WaterfallOptions {
@@ -53,8 +67,8 @@ const VERIFICATION_RANK: Record<string, number> = {
   unknown: 0,
 };
 
-function rankOf(contact: NormalizedContact): number {
-  return VERIFICATION_RANK[contact.emailVerification ?? 'unknown'] ?? 0;
+function rankOf(sourced: SourcedContact): number {
+  return VERIFICATION_RANK[sourced.contact.emailVerification ?? 'unknown'] ?? 0;
 }
 
 /** Stable per-person identity: LinkedIn URL if present, else the email. */
@@ -71,13 +85,13 @@ export class WaterfallSourcingService {
     domain: string,
     connectors: readonly WaterfallConnector[],
     opts: WaterfallOptions = {},
-  ): Promise<NormalizedContact[]> {
+  ): Promise<SourcedContact[]> {
     const cleanDomain = domain.trim();
     if (!cleanDomain) return [];
 
     const threshold = opts.threshold ?? 'verified';
     const cap = opts.contactsPerCompany;
-    const byIdentity = new Map<string, NormalizedContact>();
+    const byIdentity = new Map<string, SourcedContact>();
 
     for (const connector of connectors) {
       // Cost-aware early stop: skip this connector's credit spend if the company
@@ -85,9 +99,13 @@ export class WaterfallSourcingService {
       if (this.isSatisfied(byIdentity, threshold, cap)) break;
       try {
         for await (const incoming of connector.sourceForDomain(cleanDomain)) {
+          const sourced: SourcedContact = {
+            contact: incoming,
+            sourceKind: connector.kind,
+            sourceAccountId: connector.accountId,
+          };
           const key = identityKey(incoming);
-          const existing = byIdentity.get(key);
-          byIdentity.set(key, this.preferBetter(existing, incoming));
+          byIdentity.set(key, this.preferBetter(byIdentity.get(key), sourced));
         }
       } catch {
         // Breaker fall-through: a connector failure must not abort the whole
@@ -101,7 +119,7 @@ export class WaterfallSourcingService {
 
   /** True when enough contacts already meet the threshold to skip more connectors. */
   private isSatisfied(
-    byIdentity: ReadonlyMap<string, NormalizedContact>,
+    byIdentity: ReadonlyMap<string, SourcedContact>,
     threshold: 'verified' | 'any',
     cap: number | undefined,
   ): boolean {
@@ -109,8 +127,8 @@ export class WaterfallSourcingService {
     // maximize verified coverage.
     if (cap === undefined) return false;
     let count = 0;
-    for (const contact of byIdentity.values()) {
-      if (threshold === 'any' || contact.emailVerification === 'verified') {
+    for (const sourced of byIdentity.values()) {
+      if (threshold === 'any' || sourced.contact.emailVerification === 'verified') {
         count += 1;
         if (count >= cap) return true;
       }
@@ -120,9 +138,9 @@ export class WaterfallSourcingService {
 
   /** Keep the better of two records for the same person; existing wins ties. */
   private preferBetter(
-    existing: NormalizedContact | undefined,
-    incoming: NormalizedContact,
-  ): NormalizedContact {
+    existing: SourcedContact | undefined,
+    incoming: SourcedContact,
+  ): SourcedContact {
     if (!existing) return incoming;
     // Strictly-better verification replaces; equal rank keeps the earlier
     // (higher-priority) connector's record.
@@ -131,14 +149,14 @@ export class WaterfallSourcingService {
 
   /** Verified-first ordering, then cap — so the cap keeps the best emails. */
   private finalize(
-    byIdentity: ReadonlyMap<string, NormalizedContact>,
+    byIdentity: ReadonlyMap<string, SourcedContact>,
     cap: number | undefined,
-  ): NormalizedContact[] {
+  ): SourcedContact[] {
     // Stable sort by descending verification rank; insertion order breaks ties.
     const ordered = [...byIdentity.values()]
-      .map((contact, index) => ({ contact, index }))
-      .sort((a, b) => rankOf(b.contact) - rankOf(a.contact) || a.index - b.index)
-      .map((entry) => entry.contact);
+      .map((sourced, index) => ({ sourced, index }))
+      .sort((a, b) => rankOf(b.sourced) - rankOf(a.sourced) || a.index - b.index)
+      .map((entry) => entry.sourced);
     return cap === undefined ? ordered : ordered.slice(0, cap);
   }
 }

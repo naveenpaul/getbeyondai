@@ -23,6 +23,11 @@ import {
   type SourcingProvider,
 } from '../connectors/sourcing/sourcing-provider';
 import {
+  waterfallSourcingService,
+  type WaterfallConnector,
+} from '../connectors/sourcing/waterfall-sourcing.service';
+import { upsertContact } from '../contacts/contact-upsert';
+import {
   campaignCompleted,
   campaignFailed,
   campaignStarted,
@@ -91,6 +96,43 @@ export const CAMPAIGN_DEFAULTS = {
   maxTokens: 1024,
 } as const;
 
+/** Stage 5 (contact sourcing) tuning. */
+export const CONTACT_SOURCING_DEFAULTS = {
+  /** Top-N qualified companies (by fitScore) to pull contacts for. */
+  companies: 10,
+  /** Cap on contacts pulled per company. */
+  contactsPerCompany: 10,
+  /** Waterfall threshold — chase a verified email across connectors. */
+  threshold: 'verified' as const,
+} as const;
+
+/** A ranked candidate slimmed to what Stage 5 target-selection needs. */
+export interface ContactTargetInput {
+  candidateId: string;
+  domain: string | null;
+  fitScore: number;
+}
+
+/**
+ * Pure Stage 5 gate: from ranked candidates, pick the companies to pull contacts
+ * for — only QUALIFIED (fitScore > 0) companies that have a domain, capped to the
+ * top `limit` (the input is already fit-ranked). Pulling contacts burns connector
+ * credits, so this is where cost is bounded (eng-review A2).
+ */
+export function selectContactTargets(
+  ranked: ReadonlyArray<ContactTargetInput>,
+  limit: number,
+): Array<{ candidateId: string; domain: string }> {
+  const out: Array<{ candidateId: string; domain: string }> = [];
+  for (const r of ranked) {
+    if (out.length >= limit) break;
+    if (r.fitScore > 0 && r.domain) {
+      out.push({ candidateId: r.candidateId, domain: r.domain });
+    }
+  }
+  return out;
+}
+
 export interface OrchestrateCampaignInput {
   campaignId: string;
   orgId: string;
@@ -119,6 +161,14 @@ export interface CampaignOrchestratorDeps {
    */
   buildSourcingProvider: (orgId: string) => Promise<SourcingProvider | null>;
   /**
+   * Builds the ordered enrichment connectors for Stage 5 (contact sourcing).
+   * The worker loads the org's connected Snov/ZoomInfo accounts with decrypted
+   * creds + breaker hooks, in priority order; tests inject fakes. **Optional** —
+   * when absent (or it returns no connectors) Stage 5 is a no-op, so a campaign
+   * with no enrichment connectors behaves exactly as before (regression-safe).
+   */
+  buildContactSourcers?: (orgId: string) => Promise<WaterfallConnector[]>;
+  /**
    * Forwards a campaign event onto the bus. The worker wires this to the
    * RunEventBus; tests capture into an array.
    */
@@ -145,6 +195,10 @@ interface DerivedIcp {
 
 interface QualifiedOutcome {
   candidate: QualifiedCandidate;
+  /** CampaignCandidate.id — Stage 5 links sourced contacts to it. */
+  candidateId: string;
+  /** Company domain (may be null) — the waterfall's input for Stage 5. */
+  domain: string | null;
   costCents: number;
 }
 
@@ -239,6 +293,15 @@ export class CampaignOrchestrator {
       );
       const costCents = outcomes.reduce((sum, o) => sum + o.costCents, 0);
 
+      // ── 5. Source contacts at the top qualified companies (optional) ──
+      // No-op unless the org has enrichment connectors wired; never fails the
+      // campaign (best-effort enrichment over already-ranked companies).
+      await this.sourceContacts({
+        ranked,
+        orgId: input.orgId,
+        campaignId,
+      });
+
       await this.deps.prisma.campaign.update({
         where: { id: campaignId },
         data: { status: 'completed' },
@@ -282,6 +345,93 @@ export class CampaignOrchestrator {
     });
     this.deps.emitEvent(campaignCompleted(campaignId, 0, 0));
     return { status: 'completed', candidateCount: 0, costCents: 0 };
+  }
+
+  /**
+   * Stage 5 — source contacts at the top qualified companies via the connector
+   * waterfall, persisting each as a `Contact` linked to its `CampaignCandidate`.
+   *
+   * Best-effort enrichment: a per-company or per-contact failure is logged-by-
+   * skip, never aborts the campaign. No-op when no enrichment connectors are
+   * wired — so a campaign without Snov/ZoomInfo behaves exactly as before.
+   */
+  private async sourceContacts(params: {
+    ranked: QualifiedOutcome[];
+    orgId: string;
+    campaignId: string;
+  }): Promise<void> {
+    const build = this.deps.buildContactSourcers;
+    if (!build) return;
+    const connectors = await build(params.orgId);
+    if (connectors.length === 0) return;
+
+    const targets = selectContactTargets(
+      params.ranked.map((o) => ({
+        candidateId: o.candidateId,
+        domain: o.domain,
+        fitScore: o.candidate.fitScore,
+      })),
+      CONTACT_SOURCING_DEFAULTS.companies,
+    );
+
+    for (const target of targets) {
+      let sourced;
+      try {
+        sourced = await waterfallSourcingService.sourceCompany(
+          target.domain as string,
+          connectors,
+          {
+            threshold: CONTACT_SOURCING_DEFAULTS.threshold,
+            contactsPerCompany: CONTACT_SOURCING_DEFAULTS.contactsPerCompany,
+          },
+        );
+      } catch {
+        // A company-level sourcing failure must not sink the campaign — the
+        // companies are already ranked + persisted. Skip this company's contacts.
+        continue;
+      }
+
+      for (const s of sourced) {
+        try {
+          const { contact } = await upsertContact(this.deps.prisma, {
+            orgId: params.orgId,
+            emailRaw: s.contact.emailRaw,
+            sourceAccountId: s.sourceAccountId,
+            sourceKind: s.sourceKind,
+            externalId: s.contact.externalId,
+            externalUrl: s.contact.externalUrl ?? null,
+            fields: {
+              firstName: s.contact.firstName,
+              lastName: s.contact.lastName,
+              title: s.contact.title,
+              company: s.contact.company,
+              linkedinUrl: s.contact.linkedinUrl,
+            },
+            rawPayload: s.contact.rawPayload as Prisma.InputJsonValue,
+          });
+          // Idempotent link (re-runs don't duplicate the join row).
+          await this.deps.prisma.campaignCandidateContact.upsert({
+            where: {
+              campaignCandidateId_contactId: {
+                campaignCandidateId: target.candidateId,
+                contactId: contact.id,
+              },
+            },
+            create: {
+              campaignCandidateId: target.candidateId,
+              contactId: contact.id,
+              sourceKind: s.sourceKind,
+              emailVerification: s.contact.emailVerification ?? null,
+            },
+            update: {},
+          });
+        } catch {
+          // One bad contact (invalid email, write conflict) must not abort the
+          // rest of the company's contacts. Skip it.
+          continue;
+        }
+      }
+    }
   }
 
   /**
@@ -535,7 +685,7 @@ export class CampaignOrchestrator {
       // candidate as unqualified-on-error and move on. The AgentRun is left for
       // the reaper to finalize.
       const message = err instanceof Error ? err.message : String(err);
-      const candidateOut = await this.persistCandidate({
+      const persisted = await this.persistCandidate({
         campaignId: params.campaignId,
         candidate,
         fitScore: 0,
@@ -544,11 +694,16 @@ export class CampaignOrchestrator {
         claims: [],
       });
       const costCents = await this.readRunCost(run.id);
-      return { candidate: candidateOut, costCents };
+      return {
+        candidate: persisted.candidate,
+        candidateId: persisted.candidateId,
+        domain: candidate.domain,
+        costCents,
+      };
     }
 
     if (researchResult.status !== 'completed' || !researchResult.draftId) {
-      const candidateOut = await this.persistCandidate({
+      const persisted = await this.persistCandidate({
         campaignId: params.campaignId,
         candidate,
         fitScore: 0,
@@ -558,7 +713,12 @@ export class CampaignOrchestrator {
         draftId: null,
         claims: [],
       });
-      return { candidate: candidateOut, costCents: researchResult.costCents };
+      return {
+        candidate: persisted.candidate,
+        candidateId: persisted.candidateId,
+        domain: candidate.domain,
+        costCents: researchResult.costCents,
+      };
     }
 
     const { briefText, claims } = await this.readBrief(researchResult.draftId);
@@ -575,7 +735,7 @@ export class CampaignOrchestrator {
       budgetCents: params.budgetCents,
     });
 
-    const candidateOut = await this.persistCandidate({
+    const persisted = await this.persistCandidate({
       campaignId: params.campaignId,
       candidate,
       fitScore: score.fitScore,
@@ -584,7 +744,12 @@ export class CampaignOrchestrator {
       claims,
     });
     const costCents = await this.readRunCost(run.id);
-    return { candidate: candidateOut, costCents };
+    return {
+      candidate: persisted.candidate,
+      candidateId: persisted.candidateId,
+      domain: candidate.domain,
+      costCents,
+    };
   }
 
   private async scoreCandidate(params: {
@@ -674,8 +839,8 @@ export class CampaignOrchestrator {
     rationale: string;
     draftId: string | null;
     claims: ResearcherDraftClaim[];
-  }): Promise<QualifiedCandidate> {
-    await this.deps.prisma.campaignCandidate.create({
+  }): Promise<{ candidate: QualifiedCandidate; candidateId: string }> {
+    const created = await this.deps.prisma.campaignCandidate.create({
       data: {
         campaignId: params.campaignId,
         name: params.candidate.name,
@@ -685,14 +850,18 @@ export class CampaignOrchestrator {
         rationale: params.rationale,
         draftId: params.draftId,
       },
+      select: { id: true },
     });
     return {
-      name: params.candidate.name,
-      domain: params.candidate.domain,
-      linkedinUrl: params.candidate.linkedinUrl,
-      fitScore: params.fitScore,
-      rationale: params.rationale,
-      claims: params.claims,
+      candidate: {
+        name: params.candidate.name,
+        domain: params.candidate.domain,
+        linkedinUrl: params.candidate.linkedinUrl,
+        fitScore: params.fitScore,
+        rationale: params.rationale,
+        claims: params.claims,
+      },
+      candidateId: created.id,
     };
   }
 

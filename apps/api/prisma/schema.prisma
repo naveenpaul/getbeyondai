@@ -521,10 +521,32 @@ model CampaignCandidate {
   draftId     String? // the Researcher's cited brief for this candidate
   createdAt   DateTime @default(now())
 
-  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaign Campaign                   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contacts CampaignCandidateContact[]
 
   @@index([campaignId])
   @@map("campaign_candidates")
+}
+
+// Join: the contacts sourced for a qualified campaign company (Stage 5 of the
+// prospecting pipeline). Many-to-many — a Contact is org-global and may surface
+// across campaigns; a candidate has many contacts. sourceKind records which
+// connector won the contact in the waterfall (provenance, mirrors ContactSource).
+model CampaignCandidateContact {
+  id                  String        @id @default(cuid())
+  campaignCandidateId String
+  contactId           String
+  // Connector that produced this contact in the waterfall (snov | zoominfo | ...).
+  sourceKind          ConnectorKind
+  emailVerification   String? // 'verified' | 'unverified' | 'unknown' at source time
+  createdAt           DateTime      @default(now())
+
+  candidate CampaignCandidate @relation(fields: [campaignCandidateId], references: [id], onDelete: Cascade)
+  contact   Contact           @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignCandidateId, contactId])
+  @@index([contactId])
+  @@map("campaign_candidate_contacts")
 }
 
 // ============================================================================
@@ -596,10 +618,11 @@ model Contact {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  org     Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  emails  ContactEmail[]
-  sources ContactSource[]
-  lists   ContactListMember[]
+  org               Organization               @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  emails            ContactEmail[]
+  sources           ContactSource[]
+  lists             ContactListMember[]
+  campaignCandidates CampaignCandidateContact[]
 
   @@unique([orgId, normalizedEmail]) // primary identity constraint; NULL allowed, fallback to linkedinUrl
   @@index([orgId, linkedinUrl]) // identity fallback when email missing

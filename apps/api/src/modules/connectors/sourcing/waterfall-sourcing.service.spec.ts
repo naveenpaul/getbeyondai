@@ -26,11 +26,12 @@ function contact(
 /** A fake connector that yields a fixed list (or throws), tracking call count. */
 function fake(
   kind: ConnectorKind,
-  opts: { yield?: NormalizedContact[]; throw?: boolean },
+  opts: { yield?: NormalizedContact[]; throw?: boolean; accountId?: string },
 ): { conn: WaterfallConnector; calls: () => number } {
   let count = 0;
   const conn: WaterfallConnector = {
     kind,
+    accountId: opts.accountId ?? `${kind}-acct`,
     async *sourceForDomain() {
       count += 1;
       if (opts.throw) throw new Error('connector down');
@@ -49,7 +50,7 @@ describe('WaterfallSourcingService — identity', () => {
 });
 
 describe('WaterfallSourcingService.sourceCompany', () => {
-  it('runs connectors in priority order and merges by identity (better email wins)', async () => {
+  it('runs connectors in priority order and merges by identity (better email + its provenance wins)', async () => {
     const a = fake('snov', {
       yield: [
         contact({ emailRaw: 'p1@x.com', linkedinUrl: 'li/p1', emailVerification: 'unknown' }),
@@ -65,9 +66,10 @@ describe('WaterfallSourcingService.sourceCompany', () => {
       threshold: 'verified',
       contactsPerCompany: 5,
     });
-    const byLi = new Map(result.map((c) => [c.linkedinUrl, c]));
-    expect(byLi.get('li/p1')!.emailVerification).toBe('verified'); // B upgraded A
-    expect(byLi.get('li/p2')!.emailVerification).toBe('verified');
+    const byLi = new Map(result.map((s) => [s.contact.linkedinUrl, s]));
+    expect(byLi.get('li/p1')!.contact.emailVerification).toBe('verified'); // B upgraded A
+    expect(byLi.get('li/p1')!.sourceKind).toBe('zoominfo'); // winning connector's provenance
+    expect(byLi.get('li/p2')!.contact.emailVerification).toBe('verified');
     expect(result).toHaveLength(2);
   });
 
@@ -101,7 +103,8 @@ describe('WaterfallSourcingService.sourceCompany', () => {
     });
     expect(b.calls()).toBe(1); // A's unverified didn't satisfy → chased B
     expect(result).toHaveLength(1);
-    expect(result[0]!.emailVerification).toBe('verified');
+    expect(result[0]!.contact.emailVerification).toBe('verified');
+    expect(result[0]!.sourceKind).toBe('zoominfo');
   });
 
   it('keeps the best unverified contact when no connector verifies (never drops)', async () => {
@@ -116,7 +119,8 @@ describe('WaterfallSourcingService.sourceCompany', () => {
       contactsPerCompany: 1,
     });
     expect(result).toHaveLength(1);
-    expect(result[0]!.emailVerification).toBe('unverified'); // unverified(1) > unknown(0)
+    expect(result[0]!.contact.emailVerification).toBe('unverified'); // unverified(1) > unknown(0)
+    expect(result[0]!.sourceKind).toBe('snov');
   });
 
   it('returns empty when no connector yields a contact', async () => {
@@ -152,7 +156,7 @@ describe('WaterfallSourcingService.sourceCompany', () => {
       contactsPerCompany: 2,
     });
     expect(result).toHaveLength(2);
-    expect(result[0]!.emailVerification).toBe('verified'); // verified ranked first
+    expect(result[0]!.contact.emailVerification).toBe('verified'); // verified ranked first
   });
 
   it('skips a blank domain without calling connectors', async () => {
@@ -190,6 +194,6 @@ describe('WaterfallSourcingService.sourceCompany', () => {
       contactsPerCompany: 5,
     });
     expect(result).toHaveLength(1); // same email → one contact
-    expect(result[0]!.emailVerification).toBe('verified');
+    expect(result[0]!.contact.emailVerification).toBe('verified');
   });
 });
