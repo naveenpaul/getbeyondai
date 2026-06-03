@@ -7,7 +7,7 @@ import {
 import { ApolloSourcingProvider } from '../connectors/sourcing/apollo-sourcing.provider';
 import { ContactListSourcingProvider } from '../connectors/sourcing/contact-list-sourcing.provider';
 import { SourcingUnavailableError } from '../connectors/sourcing/sourcing-provider';
-import { buildSourcingProvider } from './campaign.worker';
+import { buildContactSourcers, buildSourcingProvider } from './campaign.worker';
 
 /**
  * Unit tests for the worker's `buildSourcingProvider` factory. The worker class
@@ -158,6 +158,41 @@ describe('buildSourcingProvider on Cloud (Apollo is self-host-only)', () => {
       'cloud',
     );
     expect(provider).toBeInstanceOf(ContactListSourcingProvider);
+  });
+});
+
+describe('buildContactSourcers', () => {
+  it('returns no connectors when none are connected', async () => {
+    const prisma = prismaWithApolloAccount(null);
+    expect(await buildContactSourcers(prisma, noCreds, 'org-1')).toEqual([]);
+  });
+
+  it('builds a bound Snov WaterfallConnector when Snov is connected', async () => {
+    const prisma = prismaWithApolloAccount({ id: 'acct-snov' });
+    const credentials = {
+      load: async () => ({ clientId: 'i', clientSecret: 's' }),
+    } as unknown as CredentialManager;
+
+    const connectors = await buildContactSourcers(prisma, credentials, 'org-1');
+    expect(connectors).toHaveLength(1);
+    expect(connectors[0]!.kind).toBe('snov');
+    expect(connectors[0]!.accountId).toBe('acct-snov');
+  });
+
+  it('skips a connector whose credentials are rejected (best-effort, never fails)', async () => {
+    const prisma = prismaWithApolloAccount({ id: 'acct-snov' });
+    const credentials = credentialsThatThrow(
+      new CredentialManagerError('expired', 'key rejected'),
+    );
+    expect(await buildContactSourcers(prisma, credentials, 'org-1')).toEqual([]);
+  });
+
+  it('re-throws a non-credential error so pg-boss can retry', async () => {
+    const prisma = prismaWithApolloAccount({ id: 'acct-snov' });
+    const credentials = credentialsThatThrow(new Error('DB unreachable'));
+    await expect(
+      buildContactSourcers(prisma, credentials, 'org-1'),
+    ).rejects.toThrow(/DB unreachable/);
   });
 });
 

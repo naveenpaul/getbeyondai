@@ -16,7 +16,9 @@ import {
   SourcingUnavailableError,
   type SourcingProvider,
 } from '../connectors/sourcing/sourcing-provider';
+import type { WaterfallConnector } from '../connectors/sourcing/waterfall-sourcing.service';
 import { apolloSourceAdapter } from '../connectors/adapters/apollo/apollo.source';
+import { snovSourceAdapter } from '../connectors/adapters/snov/snov.source';
 import {
   CredentialManager,
   CredentialManagerError,
@@ -30,7 +32,9 @@ import {
 import {
   CampaignOrchestrator,
   CAMPAIGN_TEAMMATE,
+  CONTACT_SOURCING_DEFAULTS,
 } from './campaign-orchestrator';
+import type { ConnectorKind } from '@getbeyond/shared';
 import { campaignFailed, toBusEvent } from './campaign-events';
 
 export const CAMPAIGN_RUN_QUEUE = 'campaign-run';
@@ -110,6 +114,8 @@ export class CampaignWorker implements OnModuleInit {
                 orgId,
                 data.sourcing,
               ),
+            buildContactSourcers: (orgId) =>
+              buildContactSourcers(this.prisma, this.credentials, orgId),
             // CampaignEvents ride the same bus the teammate runtime uses.
             // toBusEvent stamps runId=campaignId so the bus (which routes by
             // runId) delivers them to the stream subscribed by campaignId.
@@ -226,4 +232,85 @@ function apolloUnavailableMessage(code: CredentialManagerErrorCode): string {
     default:
       return 'Apollo isn’t connected. Connect Apollo to discover companies.';
   }
+}
+
+/**
+ * Priority order for Stage 5 contact enrichment (eng-review A3 default):
+ * ZoomInfo first (better verification for the verified-chase), then Snov. Only
+ * connectors with a committed adapter are listed; ZoomInfo joins when its
+ * adapter lands.
+ */
+const CONTACT_SOURCER_PRIORITY: readonly ConnectorKind[] = ['snov'];
+
+/**
+ * Build the org's ordered enrichment connectors for Stage 5 (contact sourcing).
+ *
+ * Mirrors `buildSourcingProvider`, but for the contacts-with-emails waterfall:
+ * for each connected enrichment connector (in priority order) it loads + decrypts
+ * the BYO key (invariant #6) and wraps the adapter as a `WaterfallConnector`
+ * bound to those creds + the credential-manager's breaker hooks. A connector
+ * that isn't connected, or whose key is rejected / circuit-broken, simply sits
+ * out the waterfall — Stage 5 is best-effort and never fails the campaign.
+ */
+export async function buildContactSourcers(
+  prisma: PrismaService,
+  credentials: CredentialManager,
+  orgId: string,
+): Promise<WaterfallConnector[]> {
+  const connectors: WaterfallConnector[] = [];
+  for (const kind of CONTACT_SOURCER_PRIORITY) {
+    const connector = await buildOneContactSourcer(
+      prisma,
+      credentials,
+      orgId,
+      kind,
+    );
+    if (connector) connectors.push(connector);
+  }
+  return connectors;
+}
+
+/** Build one bound `WaterfallConnector`, or null if it can't participate. */
+async function buildOneContactSourcer(
+  prisma: PrismaService,
+  credentials: CredentialManager,
+  orgId: string,
+  kind: ConnectorKind,
+): Promise<WaterfallConnector | null> {
+  const account = await prisma.connectorAccount.findUnique({
+    where: { orgId_kind: { orgId, kind } },
+    select: { id: true },
+  });
+  if (!account) return null;
+
+  let creds;
+  try {
+    creds = await credentials.load(account.id);
+  } catch (err) {
+    // A benign credential problem (key rejected / circuit open) just means this
+    // connector sits out the waterfall — never fail the campaign over it.
+    if (err instanceof CredentialManagerError) return null;
+    throw err;
+  }
+
+  const accountId = account.id;
+  if (kind === 'snov') {
+    return {
+      kind: 'snov',
+      accountId,
+      sourceForDomain: (domain) =>
+        snovSourceAdapter.syncContacts({
+          creds,
+          config: {
+            domains: [domain],
+            maxContactsPerDomain: CONTACT_SOURCING_DEFAULTS.contactsPerCompany,
+          },
+          onVendorFailure: (failureKind) =>
+            credentials.reportVendorFailure(accountId, failureKind),
+          onVendorSuccess: () => credentials.reportVendorSuccess(accountId),
+        }),
+    };
+  }
+  // Other kinds (zoominfo, …) join here when their adapter lands.
+  return null;
 }
