@@ -98,6 +98,23 @@ export interface IcpSummary {
 }
 
 /** A sourced company qualified + scored against the ICP, with cited signals. */
+/**
+ * A contact sourced for a candidate company in Stage 5 — source-agnostic
+ * (Snov, ZoomInfo, …). The connector that produced it rides in `source`; its
+ * deliverability at source time rides in `emailVerification`.
+ */
+export interface CampaignContact {
+  firstName: string | null;
+  lastName: string | null;
+  title: string | null;
+  email: string | null;
+  linkedinUrl: string | null;
+  /** 'verified' | 'unverified' | 'unknown' | null. */
+  emailVerification: string | null;
+  /** Connector kind that produced this contact (snov | zoominfo | …). */
+  source: string;
+}
+
 export interface QualifiedCandidate {
   name: string;
   domain: string | null;
@@ -108,6 +125,12 @@ export interface QualifiedCandidate {
   rationale: string;
   /** Cited firmographic signals (team size, stage, etc.). Cite-or-abstain. */
   claims: ResearcherDraftClaim[];
+  /**
+   * Contacts sourced at this company (Stage 5). Present in the campaign DETAIL
+   * response; omitted on the mid-stream `candidate_qualified` event (contacts
+   * are sourced after ranking). Empty array when none were found / no connector.
+   */
+  contacts?: CampaignContact[];
 }
 
 export interface CampaignDetailResponse {

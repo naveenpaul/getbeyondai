@@ -234,6 +234,57 @@ function CandidateCard({
           })}
         </ul>
       ) : null}
+
+      <CandidateContacts contacts={candidate.contacts ?? []} />
+    </div>
+  );
+}
+
+/**
+ * Stage 5 contacts sourced at a company — who to actually reach out to.
+ * Source-agnostic: each contact shows its connector + email verification.
+ */
+function CandidateContacts({
+  contacts,
+}: {
+  contacts: NonNullable<QualifiedCandidate['contacts']>;
+}): React.JSX.Element | null {
+  if (contacts.length === 0) return null;
+  return (
+    <div className="mt-3 border-t pt-3">
+      <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        Contacts ({contacts.length})
+      </p>
+      <ul className="space-y-1.5 text-sm">
+        {contacts.map((c, i) => {
+          const name =
+            [c.firstName, c.lastName].filter(Boolean).join(' ') || c.email || '—';
+          return (
+            <li
+              key={`${c.email ?? c.linkedinUrl ?? name}-${i}`}
+              className="flex flex-wrap items-baseline gap-x-2"
+            >
+              <span className="font-medium text-foreground">{name}</span>
+              {c.title ? (
+                <span className="text-xs text-muted-foreground">{c.title}</span>
+              ) : null}
+              {c.email ? (
+                <span className="font-mono text-xs text-foreground">{c.email}</span>
+              ) : null}
+              {c.emailVerification === 'verified' ? (
+                <span className="text-[11px] font-medium text-emerald-600">
+                  ✓ verified
+                </span>
+              ) : (
+                <span className="text-[11px] text-muted-foreground">
+                  {c.emailVerification ?? 'unknown'}
+                </span>
+              )}
+              <span className="text-[11px] text-muted-foreground">· {c.source}</span>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

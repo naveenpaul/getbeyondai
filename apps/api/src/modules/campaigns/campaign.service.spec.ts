@@ -305,6 +305,7 @@ describe('CampaignService.detail', () => {
         fitScore: 0.9,
         rationale: 'good',
         draftId: 'd1',
+        contacts: [],
       },
     ],
   };
@@ -369,6 +370,53 @@ describe('CampaignService.detail', () => {
         }),
       }),
     );
+  });
+
+  it('surfaces Stage 5 contacts on the candidate (source-agnostic)', async () => {
+    const campaignWithContacts = {
+      ...baseCampaign,
+      candidates: [
+        {
+          name: 'Acme',
+          domain: 'acme.com',
+          linkedinUrl: null,
+          fitScore: 0.9,
+          rationale: 'good',
+          draftId: null,
+          contacts: [
+            {
+              sourceKind: 'snov',
+              emailVerification: 'verified',
+              contact: {
+                firstName: 'Dana',
+                lastName: 'Reed',
+                title: 'VP Sales',
+                normalizedEmail: 'dana@acme.com',
+                linkedinUrl: 'https://linkedin.com/in/dana',
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const { service } = makeService({
+      campaign: { findUnique: vi.fn(async () => campaignWithContacts) },
+      draft: { findMany: vi.fn(async () => []) },
+      agentRun: { findFirst: vi.fn(async () => null) },
+    });
+
+    const result = await service.detail('org-1', 'c1');
+    expect(result.candidates[0]?.contacts).toEqual([
+      {
+        firstName: 'Dana',
+        lastName: 'Reed',
+        title: 'VP Sales',
+        email: 'dana@acme.com',
+        linkedinUrl: 'https://linkedin.com/in/dana',
+        emailVerification: 'verified',
+        source: 'snov',
+      },
+    ]);
   });
 
   it('maps a claim with no citation to citationUrl null', async () => {
@@ -460,6 +508,7 @@ describe('CampaignService.detail', () => {
           fitScore: 0,
           rationale: 'abstained',
           draftId: null,
+          contacts: [],
         },
       ],
     };

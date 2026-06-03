@@ -146,7 +146,12 @@ export class CampaignService {
       where: { id: campaignId },
       include: {
         _count: { select: { candidates: true } },
-        candidates: { orderBy: { fitScore: 'desc' } },
+        candidates: {
+          orderBy: { fitScore: 'desc' },
+          // Stage 5 contacts sourced at each company (source-agnostic — Snov,
+          // ZoomInfo, …), surfaced so the user sees who to reach out to.
+          include: { contacts: { include: { contact: true } } },
+        },
       },
     });
     if (!campaign) {
@@ -169,6 +174,15 @@ export class CampaignService {
       fitScore: c.fitScore,
       rationale: c.rationale,
       claims: c.draftId ? (claimsByDraft.get(c.draftId) ?? []) : [],
+      contacts: c.contacts.map((link) => ({
+        firstName: link.contact.firstName,
+        lastName: link.contact.lastName,
+        title: link.contact.title,
+        email: link.contact.normalizedEmail,
+        linkedinUrl: link.contact.linkedinUrl,
+        emailVerification: link.emailVerification,
+        source: link.sourceKind,
+      })),
     }));
 
     const icp = await this.loadIcp(orgId, campaignId);
