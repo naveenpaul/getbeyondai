@@ -91,7 +91,7 @@ The trust positioning depends on readers being able to audit the prompts and too
 
 The adapter architecture is designed so adding a new contact source or write-back destination is **one file, one registry line, zero changes elsewhere**. If your CRM / outreach tool / data vendor isn't listed, write the adapter and open a PR.
 
-See `docs/CONTRIBUTING.md` (landing in Phase B).
+See [`docs/CONTRIBUTING.md`](./docs/CONTRIBUTING.md) for the fork-and-PR flow, local dev setup, and testing/coding standards.
 
 ## Project state
 
