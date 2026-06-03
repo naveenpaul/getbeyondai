@@ -47,7 +47,7 @@ function cannedLlm(): LlmProvider {
       promptCaching: false,
       toolUse: true,
       systemPrompt: true,
-    } as LlmProvider['capabilities'],
+    } as unknown as LlmProvider['capabilities'],
     createMessage: vi.fn(async (): Promise<CreateMessageResult> => {
       const text = calls++ === 0 ? ICP_JSON : SCORE_JSON;
       return {
@@ -156,7 +156,7 @@ describe.skipIf(!DATABASE_URL)(
         kind: 'snov',
         accountId: snovAccountId,
         // eslint-disable-next-line @typescript-eslint/require-await
-        async *sourceForDomain() {
+        async *sourceForCompany() {
           for (const c of contacts) yield c;
         },
       };

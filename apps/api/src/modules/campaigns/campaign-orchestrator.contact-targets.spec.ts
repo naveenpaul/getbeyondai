@@ -13,6 +13,7 @@ import {
 function cand(over: Partial<ContactTargetInput>): ContactTargetInput {
   return {
     candidateId: over.candidateId ?? 'c1',
+    name: over.name ?? 'Acme',
     domain: over.domain ?? 'x.com',
     fitScore: over.fitScore ?? 0.8,
     ...over,
@@ -39,7 +40,7 @@ describe('selectContactTargets', () => {
       ],
       10,
     );
-    expect(result).toEqual([{ candidateId: 'b', domain: 'b.com' }]);
+    expect(result).toEqual([{ candidateId: 'b', name: 'Acme', domain: 'b.com' }]);
   });
 
   it('caps to the top-N (input is already fit-ranked)', () => {

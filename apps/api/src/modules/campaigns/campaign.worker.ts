@@ -19,6 +19,7 @@ import {
 import type { WaterfallConnector } from '../connectors/sourcing/waterfall-sourcing.service';
 import { apolloSourceAdapter } from '../connectors/adapters/apollo/apollo.source';
 import { snovSourceAdapter } from '../connectors/adapters/snov/snov.source';
+import { zoominfoSourceAdapter } from '../connectors/adapters/zoominfo/zoominfo.adapter';
 import {
   CredentialManager,
   CredentialManagerError,
@@ -240,7 +241,7 @@ function apolloUnavailableMessage(code: CredentialManagerErrorCode): string {
  * connectors with a committed adapter are listed; ZoomInfo joins when its
  * adapter lands.
  */
-const CONTACT_SOURCER_PRIORITY: readonly ConnectorKind[] = ['snov'];
+const CONTACT_SOURCER_PRIORITY: readonly ConnectorKind[] = ['zoominfo', 'snov'];
 
 /**
  * Build the org's ordered enrichment connectors for Stage 5 (contact sourcing).
@@ -298,11 +299,11 @@ async function buildOneContactSourcer(
     return {
       kind: 'snov',
       accountId,
-      sourceForDomain: (domain) =>
+      sourceForCompany: (company) =>
         snovSourceAdapter.syncContacts({
           creds,
           config: {
-            domains: [domain],
+            domains: [company.domain],
             maxContactsPerDomain: CONTACT_SOURCING_DEFAULTS.contactsPerCompany,
           },
           onVendorFailure: (failureKind) =>
@@ -311,6 +312,22 @@ async function buildOneContactSourcer(
         }),
     };
   }
-  // Other kinds (zoominfo, …) join here when their adapter lands.
+  if (kind === 'zoominfo') {
+    return {
+      kind: 'zoominfo',
+      accountId,
+      sourceForCompany: (company) =>
+        zoominfoSourceAdapter.syncContacts({
+          creds,
+          config: {
+            companyName: company.name,
+            maxContacts: CONTACT_SOURCING_DEFAULTS.contactsPerCompany,
+          },
+          onVendorFailure: (failureKind) =>
+            credentials.reportVendorFailure(accountId, failureKind),
+          onVendorSuccess: () => credentials.reportVendorSuccess(accountId),
+        }),
+    };
+  }
   return null;
 }

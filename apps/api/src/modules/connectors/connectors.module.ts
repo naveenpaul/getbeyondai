@@ -9,6 +9,7 @@ import {
 } from '../../common/deployment';
 import { apolloSourceAdapter } from './adapters/apollo/apollo.source';
 import { snovSourceAdapter } from './adapters/snov/snov.source';
+import { zoominfoSourceAdapter } from './adapters/zoominfo/zoominfo.adapter';
 import {
   ApolloConnectController,
   APOLLO_SOURCE_ADAPTER,
@@ -17,6 +18,10 @@ import {
   SnovConnectController,
   SNOV_SOURCE_ADAPTER,
 } from './snov-connect.controller';
+import {
+  ZoomInfoConnectController,
+  ZOOMINFO_SOURCE_ADAPTER,
+} from './zoominfo-connect.controller';
 import { CredentialManager } from './credential-manager';
 import { CsvImportController } from './csv-import.controller';
 import { CsvImportWorker } from './csv-import.worker';
@@ -32,6 +37,7 @@ import { HubspotSyncWorker } from './hubspot-sync.worker';
     HubspotSyncController,
     ApolloConnectController,
     SnovConnectController,
+    ZoomInfoConnectController,
   ],
   providers: [
     CsvImportWorker,
@@ -40,6 +46,7 @@ import { HubspotSyncWorker } from './hubspot-sync.worker';
     // The real adapter in prod; unit tests override this token with a stub.
     { provide: APOLLO_SOURCE_ADAPTER, useValue: apolloSourceAdapter },
     { provide: SNOV_SOURCE_ADAPTER, useValue: snovSourceAdapter },
+    { provide: ZOOMINFO_SOURCE_ADAPTER, useValue: zoominfoSourceAdapter },
     { provide: DEPLOYMENT_MODE, useFactory: resolveDeploymentMode },
   ],
   exports: [CredentialManager],

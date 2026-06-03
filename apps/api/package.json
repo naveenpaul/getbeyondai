@@ -20,7 +20,8 @@
     "seed:dev": "ts-node --transpile-only scripts/seed-dev.ts",
     "apollo:smoke": "ts-node --transpile-only scripts/apollo-smoke.ts",
     "apollo:people-probe": "ts-node --transpile-only scripts/apollo-people-probe.ts",
-    "snov:probe": "ts-node --transpile-only scripts/snov-probe.ts"
+    "snov:probe": "ts-node --transpile-only scripts/snov-probe.ts",
+    "zoominfo:probe": "ts-node --transpile-only scripts/zoominfo-probe.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",

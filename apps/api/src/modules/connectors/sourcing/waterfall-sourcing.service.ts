@@ -29,13 +29,20 @@ import type { ConnectorKind, NormalizedContact } from '@getbeyond/shared';
  * unit-testable with fakes and the credential boundary (invariant #6) intact.
  */
 
-/** A connector bound to creds + breaker hooks, ready to stream one domain. */
+/** The company a waterfall pass targets. Connectors key on whichever they need:
+ * Snov uses `domain`, ZoomInfo uses `name`. */
+export interface WaterfallCompany {
+  name: string;
+  domain: string;
+}
+
+/** A connector bound to creds + breaker hooks, ready to stream one company. */
 export interface WaterfallConnector {
   readonly kind: ConnectorKind;
   /** ConnectorAccount.id — carried onto each contact for upsert provenance. */
   readonly accountId: string;
-  /** Stream contacts for a single company domain (mirrors syncContacts, bound). */
-  sourceForDomain(domain: string): AsyncIterable<NormalizedContact>;
+  /** Stream contacts for a single company (mirrors syncContacts, bound). */
+  sourceForCompany(company: WaterfallCompany): AsyncIterable<NormalizedContact>;
 }
 
 /**
@@ -82,12 +89,12 @@ export class WaterfallSourcingService {
    * Returns verified-first, capped to `contactsPerCompany`.
    */
   async sourceCompany(
-    domain: string,
+    company: WaterfallCompany,
     connectors: readonly WaterfallConnector[],
     opts: WaterfallOptions = {},
   ): Promise<SourcedContact[]> {
-    const cleanDomain = domain.trim();
-    if (!cleanDomain) return [];
+    // A connector needs at least one of name/domain to query on.
+    if (!company.domain.trim() && !company.name.trim()) return [];
 
     const threshold = opts.threshold ?? 'verified';
     const cap = opts.contactsPerCompany;
@@ -98,7 +105,7 @@ export class WaterfallSourcingService {
       // is already satisfied by what earlier connectors returned.
       if (this.isSatisfied(byIdentity, threshold, cap)) break;
       try {
-        for await (const incoming of connector.sourceForDomain(cleanDomain)) {
+        for await (const incoming of connector.sourceForCompany(company)) {
           const sourced: SourcedContact = {
             contact: incoming,
             sourceKind: connector.kind,

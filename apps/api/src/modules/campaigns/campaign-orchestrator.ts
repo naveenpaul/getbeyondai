@@ -109,6 +109,7 @@ export const CONTACT_SOURCING_DEFAULTS = {
 /** A ranked candidate slimmed to what Stage 5 target-selection needs. */
 export interface ContactTargetInput {
   candidateId: string;
+  name: string;
   domain: string | null;
   fitScore: number;
 }
@@ -117,17 +118,18 @@ export interface ContactTargetInput {
  * Pure Stage 5 gate: from ranked candidates, pick the companies to pull contacts
  * for — only QUALIFIED (fitScore > 0) companies that have a domain, capped to the
  * top `limit` (the input is already fit-ranked). Pulling contacts burns connector
- * credits, so this is where cost is bounded (eng-review A2).
+ * credits, so this is where cost is bounded (eng-review A2). Carries the company
+ * name through too — ZoomInfo keys contact search on name, not domain.
  */
 export function selectContactTargets(
   ranked: ReadonlyArray<ContactTargetInput>,
   limit: number,
-): Array<{ candidateId: string; domain: string }> {
-  const out: Array<{ candidateId: string; domain: string }> = [];
+): Array<{ candidateId: string; name: string; domain: string }> {
+  const out: Array<{ candidateId: string; name: string; domain: string }> = [];
   for (const r of ranked) {
     if (out.length >= limit) break;
     if (r.fitScore > 0 && r.domain) {
-      out.push({ candidateId: r.candidateId, domain: r.domain });
+      out.push({ candidateId: r.candidateId, name: r.name, domain: r.domain });
     }
   }
   return out;
@@ -368,6 +370,7 @@ export class CampaignOrchestrator {
     const targets = selectContactTargets(
       params.ranked.map((o) => ({
         candidateId: o.candidateId,
+        name: o.candidate.name,
         domain: o.domain,
         fitScore: o.candidate.fitScore,
       })),
@@ -378,7 +381,7 @@ export class CampaignOrchestrator {
       let sourced;
       try {
         sourced = await waterfallSourcingService.sourceCompany(
-          target.domain as string,
+          { name: target.name, domain: target.domain },
           connectors,
           {
             threshold: CONTACT_SOURCING_DEFAULTS.threshold,

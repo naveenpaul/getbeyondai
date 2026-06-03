@@ -32,7 +32,7 @@ function fake(
   const conn: WaterfallConnector = {
     kind,
     accountId: opts.accountId ?? `${kind}-acct`,
-    async *sourceForDomain() {
+    async *sourceForCompany() {
       count += 1;
       if (opts.throw) throw new Error('connector down');
       for (const c of opts.yield ?? []) yield c;
@@ -42,6 +42,7 @@ function fake(
 }
 
 const svc = new WaterfallSourcingService();
+const CO = { name: 'Acme', domain: 'x.com' };
 
 describe('WaterfallSourcingService — identity', () => {
   it('exports a shared singleton', () => {
@@ -62,7 +63,7 @@ describe('WaterfallSourcingService.sourceCompany', () => {
         contact({ emailRaw: 'p2@x.com', linkedinUrl: 'li/p2', emailVerification: 'verified' }),
       ],
     });
-    const result = await svc.sourceCompany('x.com', [a.conn, b.conn], {
+    const result = await svc.sourceCompany(CO, [a.conn, b.conn], {
       threshold: 'verified',
       contactsPerCompany: 5,
     });
@@ -81,7 +82,7 @@ describe('WaterfallSourcingService.sourceCompany', () => {
       ],
     });
     const b = fake('zoominfo', { yield: [contact({ emailRaw: 'p3@x.com' })] });
-    const result = await svc.sourceCompany('x.com', [a.conn, b.conn], {
+    const result = await svc.sourceCompany(CO, [a.conn, b.conn], {
       threshold: 'verified',
       contactsPerCompany: 2,
     });
@@ -97,7 +98,7 @@ describe('WaterfallSourcingService.sourceCompany', () => {
     const b = fake('zoominfo', {
       yield: [contact({ emailRaw: 'p1b@x.com', linkedinUrl: 'li/p1', emailVerification: 'verified' })],
     });
-    const result = await svc.sourceCompany('x.com', [a.conn, b.conn], {
+    const result = await svc.sourceCompany(CO, [a.conn, b.conn], {
       threshold: 'verified',
       contactsPerCompany: 1,
     });
@@ -114,7 +115,7 @@ describe('WaterfallSourcingService.sourceCompany', () => {
     const b = fake('zoominfo', {
       yield: [contact({ emailRaw: 'p1b@x.com', linkedinUrl: 'li/p1', emailVerification: 'unknown' })],
     });
-    const result = await svc.sourceCompany('x.com', [a.conn, b.conn], {
+    const result = await svc.sourceCompany(CO, [a.conn, b.conn], {
       threshold: 'verified',
       contactsPerCompany: 1,
     });
@@ -126,7 +127,7 @@ describe('WaterfallSourcingService.sourceCompany', () => {
   it('returns empty when no connector yields a contact', async () => {
     const a = fake('snov', { yield: [] });
     const b = fake('zoominfo', { yield: [] });
-    const result = await svc.sourceCompany('x.com', [a.conn, b.conn], {});
+    const result = await svc.sourceCompany(CO, [a.conn, b.conn], {});
     expect(result).toEqual([]);
   });
 
@@ -135,7 +136,7 @@ describe('WaterfallSourcingService.sourceCompany', () => {
     const b = fake('zoominfo', {
       yield: [contact({ emailRaw: 'p1@x.com', emailVerification: 'verified' })],
     });
-    const result = await svc.sourceCompany('x.com', [a.conn, b.conn], {
+    const result = await svc.sourceCompany(CO, [a.conn, b.conn], {
       contactsPerCompany: 5,
     });
     expect(a.calls()).toBe(1);
@@ -151,7 +152,7 @@ describe('WaterfallSourcingService.sourceCompany', () => {
         contact({ emailRaw: 'u2@x.com', linkedinUrl: 'li/u2', emailVerification: 'unknown' }),
       ],
     });
-    const result = await svc.sourceCompany('x.com', [a.conn], {
+    const result = await svc.sourceCompany(CO, [a.conn], {
       threshold: 'verified',
       contactsPerCompany: 2,
     });
@@ -161,7 +162,7 @@ describe('WaterfallSourcingService.sourceCompany', () => {
 
   it('skips a blank domain without calling connectors', async () => {
     const a = fake('snov', { yield: [contact({ emailRaw: 'p1@x.com' })] });
-    const result = await svc.sourceCompany('   ', [a.conn], {});
+    const result = await svc.sourceCompany({ name: '', domain: '   ' }, [a.conn], {});
     expect(result).toEqual([]);
     expect(a.calls()).toBe(0);
   });
@@ -174,7 +175,7 @@ describe('WaterfallSourcingService.sourceCompany', () => {
       ],
     });
     const b = fake('zoominfo', { yield: [contact({ emailRaw: 'p3@x.com' })] });
-    const result = await svc.sourceCompany('x.com', [a.conn, b.conn], {
+    const result = await svc.sourceCompany(CO, [a.conn, b.conn], {
       threshold: 'any',
       contactsPerCompany: 2,
     });
@@ -189,7 +190,7 @@ describe('WaterfallSourcingService.sourceCompany', () => {
     const b = fake('zoominfo', {
       yield: [contact({ emailRaw: 'dup@x.com', emailVerification: 'verified' })],
     });
-    const result = await svc.sourceCompany('x.com', [a.conn, b.conn], {
+    const result = await svc.sourceCompany(CO, [a.conn, b.conn], {
       threshold: 'verified',
       contactsPerCompany: 5,
     });

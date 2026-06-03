@@ -3,6 +3,7 @@ import { csvSourceAdapter } from './adapters/csv.source';
 import { hubspotSourceAdapter } from './adapters/hubspot.source';
 import { apolloSourceAdapter } from './adapters/apollo/apollo.source';
 import { snovSourceAdapter } from './adapters/snov/snov.source';
+import { zoominfoSourceAdapter } from './adapters/zoominfo/zoominfo.adapter';
 
 /**
  * Source-adapter registry (eng-review pass-2 adapter architecture section).
@@ -23,7 +24,8 @@ const SOURCE_ADAPTERS: Partial<Record<ConnectorKind, SourceAdapter<unknown>>> =
     hubspot: hubspotSourceAdapter as SourceAdapter<unknown>,
     apollo: apolloSourceAdapter as SourceAdapter<unknown>,
     snov: snovSourceAdapter as SourceAdapter<unknown>,
-    // salesforce, zoominfo land in T8.
+    zoominfo: zoominfoSourceAdapter as SourceAdapter<unknown>,
+    // salesforce lands in T8.
   };
 
 export class UnknownConnectorError extends Error {

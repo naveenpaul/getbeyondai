@@ -161,26 +161,45 @@ describe('buildSourcingProvider on Cloud (Apollo is self-host-only)', () => {
   });
 });
 
+/** A prisma stub whose connectorAccount.findUnique returns an account only for
+ * the given kinds (so we can simulate which connectors an org has connected). */
+function prismaWithConnectorKinds(kinds: Set<string>): PrismaService {
+  return {
+    connectorAccount: {
+      findUnique: async ({ where }: { where: { orgId_kind: { kind: string } } }) =>
+        kinds.has(where.orgId_kind.kind)
+          ? { id: `acct-${where.orgId_kind.kind}` }
+          : null,
+    },
+  } as unknown as PrismaService;
+}
+
 describe('buildContactSourcers', () => {
+  const creds = {
+    load: async () => ({ clientId: 'i', clientSecret: 's' }),
+  } as unknown as CredentialManager;
+
   it('returns no connectors when none are connected', async () => {
-    const prisma = prismaWithApolloAccount(null);
-    expect(await buildContactSourcers(prisma, noCreds, 'org-1')).toEqual([]);
+    const prisma = prismaWithConnectorKinds(new Set());
+    expect(await buildContactSourcers(prisma, creds, 'org-1')).toEqual([]);
   });
 
-  it('builds a bound Snov WaterfallConnector when Snov is connected', async () => {
-    const prisma = prismaWithApolloAccount({ id: 'acct-snov' });
-    const credentials = {
-      load: async () => ({ clientId: 'i', clientSecret: 's' }),
-    } as unknown as CredentialManager;
-
-    const connectors = await buildContactSourcers(prisma, credentials, 'org-1');
+  it('builds a bound Snov WaterfallConnector when only Snov is connected', async () => {
+    const prisma = prismaWithConnectorKinds(new Set(['snov']));
+    const connectors = await buildContactSourcers(prisma, creds, 'org-1');
     expect(connectors).toHaveLength(1);
     expect(connectors[0]!.kind).toBe('snov');
     expect(connectors[0]!.accountId).toBe('acct-snov');
   });
 
+  it('orders ZoomInfo before Snov when both are connected', async () => {
+    const prisma = prismaWithConnectorKinds(new Set(['snov', 'zoominfo']));
+    const connectors = await buildContactSourcers(prisma, creds, 'org-1');
+    expect(connectors.map((c) => c.kind)).toEqual(['zoominfo', 'snov']);
+  });
+
   it('skips a connector whose credentials are rejected (best-effort, never fails)', async () => {
-    const prisma = prismaWithApolloAccount({ id: 'acct-snov' });
+    const prisma = prismaWithConnectorKinds(new Set(['snov']));
     const credentials = credentialsThatThrow(
       new CredentialManagerError('expired', 'key rejected'),
     );
@@ -188,7 +207,7 @@ describe('buildContactSourcers', () => {
   });
 
   it('re-throws a non-credential error so pg-boss can retry', async () => {
-    const prisma = prismaWithApolloAccount({ id: 'acct-snov' });
+    const prisma = prismaWithConnectorKinds(new Set(['snov']));
     const credentials = credentialsThatThrow(new Error('DB unreachable'));
     await expect(
       buildContactSourcers(prisma, credentials, 'org-1'),

@@ -23,7 +23,7 @@ describe('source-adapter registry', () => {
   });
 
   it('throws UnknownConnectorError for kinds not yet registered', () => {
-    for (const kind of ['salesforce', 'zoominfo'] as const) {
+    for (const kind of ['salesforce'] as const) {
       try {
         getSourceAdapter(kind);
         expect.fail(`should have thrown for ${kind}`);
@@ -47,8 +47,8 @@ describe('source-adapter registry', () => {
     expect(isRegisteredSource('hubspot')).toBe(true);
     expect(isRegisteredSource('apollo')).toBe(true);
     expect(isRegisteredSource('snov')).toBe(true);
+    expect(isRegisteredSource('zoominfo')).toBe(true);
     expect(isRegisteredSource('salesforce')).toBe(false);
-    expect(isRegisteredSource('zoominfo')).toBe(false);
   });
 
   it('listRegisteredSources returns only the connectors that are wired', () => {
@@ -57,6 +57,7 @@ describe('source-adapter registry', () => {
       'csv',
       'hubspot',
       'snov',
+      'zoominfo',
     ]);
   });
 });
