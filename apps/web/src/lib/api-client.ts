@@ -361,6 +361,35 @@ export async function connectSnov(
   return res.json() as Promise<{ id: string; status: 'connected' }>;
 }
 
+export interface ZoomInfoAccountStatus {
+  connected: boolean;
+  status?: string;
+}
+
+/** Current ZoomInfo connection state for the org. */
+export async function getZoomInfoStatus(): Promise<ZoomInfoAccountStatus> {
+  const res = await fetch(`${env.apiUrl}/connectors/zoominfo/account`, {
+    credentials: 'include',
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<ZoomInfoAccountStatus>;
+}
+
+/** Validate + persist ZoomInfo BYO credentials. Throws ApiError(400) on bad creds. */
+export async function connectZoomInfo(
+  clientId: string,
+  clientSecret: string,
+): Promise<{ id: string; status: 'connected' }> {
+  const res = await fetch(`${env.apiUrl}/connectors/zoominfo/account`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ clientId, clientSecret }),
+    credentials: 'include',
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<{ id: string; status: 'connected' }>;
+}
+
 export async function getCsvSyncRun(
   syncRunId: string,
 ): Promise<CsvSyncRunStatusResponse> {
