@@ -47,7 +47,7 @@ model Organization {
   updatedAt DateTime @updatedAt
 
   memberships       OrgMembership[]
-  activeForUsers    User[]             @relation("UserActiveOrg")
+  activeForUsers    User[]              @relation("UserActiveOrg")
   invites           Invite[]
   companyBrain      CompanyBrain?
   agentRuns         AgentRun[]
@@ -276,7 +276,7 @@ model AgentRun {
 }
 
 model ModelCall {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   runId        String
   // Which LLM provider served this call. Nullable: pre-abstraction rows (and
   // rows written before P5 wires call-model.ts to populate it) have no
@@ -287,8 +287,8 @@ model ModelCall {
   modelName    String
   inputTokens  Int
   outputTokens Int
-  costCents    Int      @default(0)
-  at           DateTime @default(now())
+  costCents    Int       @default(0)
+  at           DateTime  @default(now())
 
   run       AgentRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
   toolCalls ToolCall[]
@@ -481,14 +481,14 @@ enum CampaignStatus {
 }
 
 model Campaign {
-  id     String         @id @default(cuid())
-  orgId  String
-  title  String
-  goal   String // the natural-language intent the user typed in the chat
-  status CampaignStatus @default(draft)
+  id          String         @id @default(cuid())
+  orgId       String
+  title       String
+  goal        String // the natural-language intent the user typed in the chat
+  status      CampaignStatus @default(draft)
   // Soft reference (like ContactList.source) to the ContactList of closed-won
   // accounts the ICP is derived from. Nullable until a wins list is attached.
-  winsListId String?
+  winsListId  String?
   // The run configuration, persisted so a campaign can be re-run faithfully
   // (and so detail can surface what it used). Previously these lived ONLY in
   // the pg-boss job payload — business state outside the DB, which broke re-run.
@@ -497,8 +497,8 @@ model Campaign {
   sourcing    Json? // SourcingConfig | null
   budgetCents Int?
   createdBy   String // userId
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
 
   org        Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
   candidates CampaignCandidate[]
@@ -523,6 +523,7 @@ model CampaignCandidate {
 
   campaign Campaign                   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   contacts CampaignCandidateContact[]
+  signals  CompanySignal[]
 
   @@index([campaignId])
   @@map("campaign_candidates")
@@ -547,6 +548,53 @@ model CampaignCandidateContact {
   @@unique([campaignCandidateId, contactId])
   @@index([contactId])
   @@map("campaign_candidate_contacts")
+}
+
+// A buying-signal observation for one qualified company (Stage 6 of the
+// prospecting pipeline). Defined-at-ICP (which signals to look for) / detected-
+// per-company (this table). Each signal's *definition* — category, usage mode,
+// how it's acquired, decay window — lives in code (`signals/signal-definition.ts`,
+// the registry), so adding a new signal is data, not a migration. Rows are the
+// queryable, time-stamped, citation-anchored record the ICP signalSpec ranks
+// companies against.
+//
+// `detectedAt` = when the underlying EVENT happened (drives "act now" + decay);
+// `evaluatedAt` = when WE last checked (drives the re-scan / monitor loop).
+// `citationId` is a SOFT FK to Citation (mirrors Draft.recipient → contactId);
+// cite-or-abstain for research-sourced signals is enforced at write time in the
+// repository, not by the DB (invariant: a present research signal carries a
+// citation, same rule as Claim).
+model CompanySignal {
+  id          String       @id @default(cuid())
+  candidateId String
+  key         String // → SignalDefinition.key (validated against the registry on write)
+  status      SignalStatus @default(unknown)
+  value       Json         @default("{}") // signal-specific payload, e.g. { amount: 20000000, round: "B" }
+  citationId  String? // soft FK → Citation; required for present research signals
+  source      SignalSource
+  detectedAt  DateTime? // when the event happened; null for absent/unknown
+  evaluatedAt DateTime     @default(now())
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  candidate CampaignCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@unique([candidateId, key]) // re-evaluation UPDATES, never duplicates
+  @@index([key, status]) // "all companies where signal X fired" is a real query
+  @@map("company_signals")
+}
+
+enum SignalStatus {
+  present
+  absent
+  unknown
+}
+
+enum SignalSource {
+  connector // pushed-down discovery filter hit (e.g. ZoomInfo "recently funded")
+  research // derived + cited by the Researcher from the web
+  feed // external trigger feed (future)
+  computed // derived from our own pipeline (e.g. reachability from the contact waterfall)
 }
 
 // ============================================================================
@@ -618,10 +666,10 @@ model Contact {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  org               Organization               @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  emails            ContactEmail[]
-  sources           ContactSource[]
-  lists             ContactListMember[]
+  org                Organization               @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  emails             ContactEmail[]
+  sources            ContactSource[]
+  lists              ContactListMember[]
   campaignCandidates CampaignCandidateContact[]
 
   @@unique([orgId, normalizedEmail]) // primary identity constraint; NULL allowed, fallback to linkedinUrl
