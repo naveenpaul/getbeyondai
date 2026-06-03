@@ -16,11 +16,17 @@ import {
   ApiError,
   connectApollo,
   connectSnov,
+  connectZoomInfo,
   getApolloStatus,
   getSnovStatus,
+  getZoomInfoStatus,
   type ApolloAccountStatus,
   type SnovAccountStatus,
+  type ZoomInfoAccountStatus,
 } from '@/lib/api-client';
+
+/** A BYO-key connector's connection state — shared shape for Snov + ZoomInfo. */
+type ByoStatus = SnovAccountStatus | ZoomInfoAccountStatus;
 
 /**
  * Settings → Connectors. Where the org wires data sources for campaign
@@ -32,17 +38,20 @@ import {
 export default function ConnectorsSettingsPage(): React.JSX.Element {
   const [status, setStatus] = useState<ApolloAccountStatus | null>(null);
   const [snovStatus, setSnovStatus] = useState<SnovAccountStatus | null>(null);
+  const [zoomStatus, setZoomStatus] = useState<ZoomInfoAccountStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      const [apollo, snov] = await Promise.all([
+      const [apollo, snov, zoom] = await Promise.all([
         getApolloStatus(),
         getSnovStatus(),
+        getZoomInfoStatus(),
       ]);
       setStatus(apollo);
       setSnovStatus(snov);
+      setZoomStatus(zoom);
     } catch (err) {
       setLoadError(formatError(err));
     }
@@ -65,7 +74,7 @@ export default function ConnectorsSettingsPage(): React.JSX.Element {
     );
   }
 
-  if (status === null || snovStatus === null) {
+  if (status === null || snovStatus === null || zoomStatus === null) {
     return (
       <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -82,13 +91,46 @@ export default function ConnectorsSettingsPage(): React.JSX.Element {
             Discovery sources
           </h2>
           <p className="text-sm text-muted-foreground">
-            Connect a data source so campaigns can discover companies matching
-            your ICP. Keys are stored encrypted and never shown again.
+            Find companies matching your ICP. Keys are stored encrypted and never
+            shown again.
           </p>
         </div>
 
         <ApolloConnectorCard status={status} onConnected={() => void load()} />
-        <SnovConnectorCard status={snovStatus} onConnected={() => void load()} />
+      </section>
+
+      <section className="space-y-4">
+        <div className="space-y-1">
+          <h2 className="text-lg font-semibold tracking-tight">
+            Contact sources
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Find the actual people + verified emails at your matched companies.
+            Connect at least one so campaigns can surface contacts to reach out
+            to.
+          </p>
+        </div>
+
+        <ByoKeyConnectorCard
+          title="ZoomInfo"
+          idLabel="API Client ID"
+          secretLabel="API Client Secret"
+          connectedHelp="Credentials are configured. ZoomInfo finds people + enriched emails at your matched companies. Paste new credentials to replace them."
+          unconnectedHelp="Add your ZoomInfo API credentials to find people + emails at matched companies. Generate them in ZoomInfo under Admin Portal → API."
+          status={zoomStatus}
+          onConnect={connectZoomInfo}
+          onConnected={() => void load()}
+        />
+        <ByoKeyConnectorCard
+          title="Snov.io"
+          idLabel="API User ID"
+          secretLabel="API Secret"
+          connectedHelp="Credentials are configured. Snov finds contacts + verified emails at your matched companies. Paste new credentials to replace them."
+          unconnectedHelp="Add your Snov API credentials to find contacts + verified emails. Find them in Snov under Settings → API."
+          status={snovStatus}
+          onConnect={connectSnov}
+          onConnected={() => void load()}
+        />
       </section>
     </div>
   );
@@ -141,8 +183,8 @@ function ApolloConnectorCard({
           {!status.available
             ? 'Apollo discovery is available on self-hosted getbeyond only — its API terms don’t permit a hosted integration.'
             : status.connected
-              ? 'A key is configured. Discovery runs against Apollo for new campaigns. Paste a new key to replace it.'
-              : 'Add your Apollo API key to discover companies matching each campaign’s ICP. Find it in Apollo under Settings → Integrations → API.'}
+              ? 'A key is configured. Discovery runs against Apollo for new searches. Paste a new key to replace it.'
+              : 'Add your Apollo API key to discover companies matching each search’s ICP. Find it in Apollo under Settings → Integrations → API.'}
         </CardDescription>
       </CardHeader>
       {status.available ? (
@@ -214,11 +256,28 @@ function ApolloStatusBadge({
   );
 }
 
-function SnovConnectorCard({
+/**
+ * A two-field BYO-key connector card (API id + secret). Shared by Snov and
+ * ZoomInfo — same shape, different labels/help/connect fn. The id is a unique
+ * slug derived from the title so two cards' inputs don't collide.
+ */
+function ByoKeyConnectorCard({
+  title,
+  idLabel,
+  secretLabel,
+  connectedHelp,
+  unconnectedHelp,
   status,
+  onConnect,
   onConnected,
 }: {
-  status: SnovAccountStatus;
+  title: string;
+  idLabel: string;
+  secretLabel: string;
+  connectedHelp: string;
+  unconnectedHelp: string;
+  status: ByoStatus;
+  onConnect: (clientId: string, clientSecret: string) => Promise<unknown>;
   onConnected: () => void;
 }): React.JSX.Element {
   const [clientId, setClientId] = useState('');
@@ -226,6 +285,7 @@ function SnovConnectorCard({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   const canSubmit = clientId.trim().length > 0 && clientSecret.trim().length > 0;
 
   async function onSubmit(e: React.FormEvent): Promise<void> {
@@ -234,7 +294,7 @@ function SnovConnectorCard({
     setSubmitting(true);
     setError(null);
     try {
-      await connectSnov(clientId.trim(), clientSecret.trim());
+      await onConnect(clientId.trim(), clientSecret.trim());
       setClientId('');
       setClientSecret('');
       onConnected();
@@ -255,38 +315,36 @@ function SnovConnectorCard({
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <Plug className="h-4 w-4 text-muted-foreground" />
-            Snov.io
+            {title}
           </CardTitle>
-          <SnovStatusBadge status={status} />
+          <ByoStatusBadge status={status} />
         </div>
         <CardDescription>
-          {status.connected
-            ? 'Credentials are configured. Snov finds contacts + verified emails for the company domains you import. Paste new credentials to replace them.'
-            : 'Add your Snov API credentials to find contacts and verified emails for a list of company domains. Find them in Snov under Settings → API.'}
+          {status.connected ? connectedHelp : unconnectedHelp}
         </CardDescription>
       </CardHeader>
       <CardContent>
         <form className="flex flex-wrap items-end gap-3" onSubmit={onSubmit}>
           <div className="min-w-[14rem] flex-1 space-y-1">
-            <label htmlFor="snov-client-id" className="text-xs font-medium">
-              API User ID
+            <label htmlFor={`${slug}-client-id`} className="text-xs font-medium">
+              {idLabel}
             </label>
             <Input
-              id="snov-client-id"
+              id={`${slug}-client-id`}
               type="text"
               autoComplete="off"
-              placeholder={status.connected ? '••••••••••••' : 'Paste user ID…'}
+              placeholder={status.connected ? '••••••••••••' : 'Paste id…'}
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
               disabled={submitting}
             />
           </div>
           <div className="min-w-[14rem] flex-1 space-y-1">
-            <label htmlFor="snov-client-secret" className="text-xs font-medium">
-              API Secret
+            <label htmlFor={`${slug}-client-secret`} className="text-xs font-medium">
+              {secretLabel}
             </label>
             <Input
-              id="snov-client-secret"
+              id={`${slug}-client-secret`}
               type="password"
               autoComplete="off"
               placeholder={status.connected ? '••••••••••••' : 'Paste secret…'}
@@ -313,11 +371,7 @@ function SnovConnectorCard({
   );
 }
 
-function SnovStatusBadge({
-  status,
-}: {
-  status: SnovAccountStatus;
-}): React.JSX.Element {
+function ByoStatusBadge({ status }: { status: ByoStatus }): React.JSX.Element {
   if (!status.connected) {
     return <Badge variant="outline">Not connected</Badge>;
   }

@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { CampaignComposer } from '@/components/CampaignComposer';
 import { ConnectApolloBanner } from '@/components/ConnectApolloBanner';
+import { ConnectContactsBanner } from '@/components/ConnectContactsBanner';
 import { ApiError, listCampaigns } from '@/lib/api-client';
 import { formatRelativeTime } from '@/lib/campaign-transcript';
 import { useIdentity } from '@/lib/use-identity';
@@ -113,7 +114,7 @@ function CampaignsHome(): React.JSX.Element {
   return (
     <main className="container max-w-3xl space-y-10 py-12">
       <header className="space-y-2">
-        <h1 className="text-2xl font-semibold tracking-tight">Campaigns</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Prospects</h1>
         <p className="text-sm text-muted-foreground">
           Describe who you want to reach. We&apos;ll derive your ICP, source
           lookalikes, and rank them by fit — every signal cited.
@@ -123,11 +124,12 @@ function CampaignsHome(): React.JSX.Element {
       <CampaignComposer variant="hero" autoFocus />
 
       <ConnectApolloBanner />
+      <ConnectContactsBanner />
 
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-foreground">
-            Your campaigns
+            Your searches
           </h2>
         </div>
         <CampaignList state={state} />
@@ -141,7 +143,7 @@ function CampaignList({ state }: { state: ListState }): React.JSX.Element {
     return (
       <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" />
-        Loading campaigns…
+        Loading searches…
       </div>
     );
   }
@@ -149,7 +151,7 @@ function CampaignList({ state }: { state: ListState }): React.JSX.Element {
   if (state.status === 'error') {
     return (
       <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-        Failed to load campaigns: {state.message}
+        Failed to load searches: {state.message}
       </div>
     );
   }
@@ -160,9 +162,9 @@ function CampaignList({ state }: { state: ListState }): React.JSX.Element {
         <div className="mx-auto mb-3 flex h-9 w-9 items-center justify-center rounded-md bg-muted text-muted-foreground">
           <Plus className="h-4 w-4" />
         </div>
-        <p className="text-sm font-medium text-foreground">No campaigns yet</p>
+        <p className="text-sm font-medium text-foreground">No searches yet</p>
         <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
-          Start your first campaign with the box above — describe your goal and
+          Start your first search with the box above — describe your goal and
           we&apos;ll discover matching companies once Apollo is connected.
         </p>
       </div>
@@ -204,7 +206,7 @@ function CampaignRow({
       <div className="flex shrink-0 flex-col items-end gap-0.5 text-xs text-muted-foreground">
         <span className="tabular-nums">
           {campaign.candidateCount}{' '}
-          {campaign.candidateCount === 1 ? 'candidate' : 'candidates'}
+          {campaign.candidateCount === 1 ? 'prospect' : 'prospects'}
         </span>
         <span>{formatRelativeTime(campaign.updatedAt)}</span>
       </div>
