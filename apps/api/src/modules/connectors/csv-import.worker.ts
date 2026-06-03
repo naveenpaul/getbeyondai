@@ -25,6 +25,8 @@ export interface CsvImportJobPayload {
   csv: CsvImportSource;
   columnMapping: CsvColumnMapping;
   triggeredBy: string;
+  /** Display name for the ContactList created from this import (optional). */
+  listName?: string;
 }
 
 /**
@@ -73,6 +75,7 @@ export class CsvImportWorker implements OnModuleInit {
           csv: { kind: 'buffer', content: csvBuffer },
           columnMapping: job.data.columnMapping,
           triggeredBy: job.data.triggeredBy,
+          listName: job.data.listName,
           syncRunId: job.data.syncRunId,
         });
         // Success path only — leave S3 object intact on failure so pg-boss

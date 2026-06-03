@@ -215,6 +215,39 @@ describe.skipIf(!DATABASE_URL)(
         where: { orgId: alice.orgId },
       });
       expect(contacts).toHaveLength(2);
+
+      // The import groups the contacts into a ContactList named after the
+      // uploaded file ("leads.csv" → "leads"), ready for campaign sourcing.
+      const lists = await prisma.contactList.findMany({
+        where: { orgId: alice.orgId },
+      });
+      expect(lists).toHaveLength(1);
+      expect(lists[0]!.name).toBe('leads');
+      expect(lists[0]!.contactCount).toBe(2);
+      const members = await prisma.contactListMember.findMany({
+        where: { listId: lists[0]!.id },
+      });
+      expect(members.map((m) => m.contactId).sort()).toEqual(
+        contacts.map((c) => c.id).sort(),
+      );
+    });
+
+    it('explicit listName in metadata overrides the filename', async () => {
+      const res = await postMultipart('Email\nzoe@acme.com', {
+        sourceAccountId: csvAccountA,
+        listName: 'My VIP list',
+        columnMapping: { email: 'Email' },
+      });
+      expect(res.statusCode).toBe(202);
+      const body = res.json() as { syncRunId: string };
+      const finalState = await pollSyncRunUntilDone(body.syncRunId, alice.cookie);
+      expect(finalState.status).toBe('completed');
+
+      const lists = await prisma.contactList.findMany({
+        where: { orgId: alice.orgId },
+      });
+      expect(lists).toHaveLength(1);
+      expect(lists[0]!.name).toBe('My VIP list');
     });
 
     it('400 when metadata field is missing', async () => {

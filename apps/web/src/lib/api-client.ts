@@ -302,6 +302,36 @@ export async function submitCsvImport(args: {
   return res.json() as Promise<CsvImportEnqueueResponse>;
 }
 
+export interface ApolloAccountStatus {
+  /** False on getbeyond Cloud — Apollo discovery is self-host-only. */
+  available: boolean;
+  connected: boolean;
+  status?: string;
+}
+
+/** Current Apollo connection state for the org. */
+export async function getApolloStatus(): Promise<ApolloAccountStatus> {
+  const res = await fetch(`${env.apiUrl}/connectors/apollo/account`, {
+    credentials: 'include',
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<ApolloAccountStatus>;
+}
+
+/** Validate + persist an Apollo BYO API key. Throws ApiError(400) on a bad key. */
+export async function connectApollo(
+  apiKey: string,
+): Promise<{ id: string; status: 'connected' }> {
+  const res = await fetch(`${env.apiUrl}/connectors/apollo/account`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ apiKey }),
+    credentials: 'include',
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<{ id: string; status: 'connected' }>;
+}
+
 export async function getCsvSyncRun(
   syncRunId: string,
 ): Promise<CsvSyncRunStatusResponse> {

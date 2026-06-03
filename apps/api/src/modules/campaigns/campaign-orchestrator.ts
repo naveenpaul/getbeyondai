@@ -15,11 +15,12 @@ import {
   runResearch,
   type ResearchResult,
 } from '../teammates/researcher/researcher.service';
-import type {
-  CandidateCompany,
-  FindCandidatesOptions,
-  IcpCriteria,
-  SourcingProvider,
+import {
+  SourcingUnavailableError,
+  type CandidateCompany,
+  type FindCandidatesOptions,
+  type IcpCriteria,
+  type SourcingProvider,
 } from '../connectors/sourcing/sourcing-provider';
 import {
   campaignCompleted,
@@ -111,10 +112,12 @@ export interface CampaignOrchestratorDeps {
   llm: LlmProvider;
   /**
    * Builds the per-run SourcingProvider for this campaign. The worker wires the
-   * concrete `ContactListSourcingProvider`; tests pass a fake. Throws a clear
-   * "not configured" error for reserved providers (e.g. apollo).
+   * concrete provider (ContactList or Apollo); tests pass a fake. Async because
+   * Apollo discovery loads + decrypts the connector credentials. Throws
+   * `SourcingUnavailableError` for benign, user-fixable problems (Apollo not
+   * connected / key rejected) — the orchestrator surfaces those gracefully.
    */
-  buildSourcingProvider: (orgId: string) => SourcingProvider | null;
+  buildSourcingProvider: (orgId: string) => Promise<SourcingProvider | null>;
   /**
    * Forwards a campaign event onto the bus. The worker wires this to the
    * RunEventBus; tests capture into an array.
@@ -187,25 +190,26 @@ export class CampaignOrchestrator {
       this.deps.emitEvent(icpDerived(campaignId, derived.summary));
 
       // ── 2. Source candidate pool (optional) ─────────────────────────
-      const provider = this.deps.buildSourcingProvider(input.orgId);
+      let provider: SourcingProvider | null;
+      try {
+        provider = await this.deps.buildSourcingProvider(input.orgId);
+      } catch (err) {
+        // A benign, user-fixable sourcing problem (Apollo not connected / key
+        // rejected) — surface the actionable message and complete gracefully
+        // instead of failing the campaign. Anything else bubbles to the outer
+        // catch → campaign_failed (so pg-boss can retry real faults).
+        if (err instanceof SourcingUnavailableError) {
+          return await this.completeWithoutSource(campaignId, err.userMessage);
+        }
+        throw err;
+      }
       if (provider === null) {
         // No source attached: the ICP is derived + shown, but there's no pool
-        // to qualify. Complete gracefully and prompt the user to add a source
-        // rather than failing. (ICP-derivation cost is audited on its own
-        // AgentRun; the campaign total is 0 here since no qualify ran.)
-        this.deps.emitEvent(
-          sourcingCompleted(
-            campaignId,
-            'No candidate source attached — add a list (CSV import or HubSpot) to find matching companies.',
-            0,
-          ),
+        // to qualify. Complete gracefully and prompt the user to add a source.
+        return await this.completeWithoutSource(
+          campaignId,
+          'No candidate source attached — connect Apollo to discover companies, or import a list.',
         );
-        await this.deps.prisma.campaign.update({
-          where: { id: campaignId },
-          data: { status: 'completed' },
-        });
-        this.deps.emitEvent(campaignCompleted(campaignId, 0, 0));
-        return { status: 'completed', candidateCount: 0, costCents: 0 };
       }
       this.deps.emitEvent(sourcingStarted(campaignId, provider.name));
       const opts: FindCandidatesOptions = { limit: candidateLimit };
@@ -259,6 +263,25 @@ export class CampaignOrchestrator {
       });
       return { status: 'failed', candidateCount: 0, costCents: 0 };
     }
+  }
+
+  /**
+   * Graceful terminal for "ICP derived, but there's no usable candidate source"
+   * — no source attached, or Apollo not connected / key rejected. Emits the
+   * actionable message on the stream and completes the campaign with zero
+   * candidates (not `failed`, since the user can fix it and re-run).
+   */
+  private async completeWithoutSource(
+    campaignId: string,
+    message: string,
+  ): Promise<OrchestrateCampaignResult> {
+    this.deps.emitEvent(sourcingCompleted(campaignId, message, 0));
+    await this.deps.prisma.campaign.update({
+      where: { id: campaignId },
+      data: { status: 'completed' },
+    });
+    this.deps.emitEvent(campaignCompleted(campaignId, 0, 0));
+    return { status: 'completed', candidateCount: 0, costCents: 0 };
   }
 
   /**

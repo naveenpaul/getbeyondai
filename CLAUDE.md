@@ -115,6 +115,15 @@ class. The verbosity is a tax we pay so test + prod paths agree.
 - Do NOT run migrations against running databases without explicit user request.
 - Focus on code changes, tests, and builds only.
 
+## Design System
+
+Always read `DESIGN.md` before making any visual or UI decision. Font choices,
+colors, spacing, radius, and **motion tokens** (durations/easing, reduced-motion)
+are defined there — do not deviate without explicit user approval. In QA/design
+review, flag any code that doesn't match `DESIGN.md`. The Prospects workspace
+redesign that drove the motion/stepper tokens lives in
+`docs/plans/prospects-ux-plan.md`.
+
 ## Markdown file rules
 
 Before creating any `.md` file:

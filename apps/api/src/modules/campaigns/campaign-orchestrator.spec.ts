@@ -12,11 +12,12 @@ import {
 import { BudgetExceededError } from '../teammates/runtime/cost';
 import type { LlmProvider } from '../teammates/runtime/llm-provider';
 import type { CreateMessageResult } from '../teammates/runtime/llm-types';
-import type {
-  CandidateCompany,
-  IcpCriteria,
-  SourcingProvider,
-  SourcingResult,
+import {
+  SourcingUnavailableError,
+  type CandidateCompany,
+  type IcpCriteria,
+  type SourcingProvider,
+  type SourcingResult,
 } from '../connectors/sourcing/sourcing-provider';
 import type {
   runResearch,
@@ -328,7 +329,7 @@ describe('CampaignOrchestrator', () => {
         prisma,
         llm,
         // No source attached.
-        buildSourcingProvider: () => null,
+        buildSourcingProvider: async () => null,
         emitEvent,
         runResearch: makeRunResearch(() => researchCompleted('unused')),
       });
@@ -416,7 +417,7 @@ describe('CampaignOrchestrator', () => {
       const orchestrator = new CampaignOrchestrator({
         prisma,
         llm,
-        buildSourcingProvider: () => provider,
+        buildSourcingProvider: async () => provider,
         emitEvent,
         runResearch: research,
       });
@@ -481,7 +482,7 @@ describe('CampaignOrchestrator', () => {
       const orchestrator = new CampaignOrchestrator({
         prisma,
         llm,
-        buildSourcingProvider: () => provider,
+        buildSourcingProvider: async () => provider,
         emitEvent,
         runResearch: research,
       });
@@ -519,7 +520,7 @@ describe('CampaignOrchestrator', () => {
       const orchestrator = new CampaignOrchestrator({
         prisma,
         llm,
-        buildSourcingProvider: () => provider,
+        buildSourcingProvider: async () => provider,
         emitEvent,
         runResearch: research,
       });
@@ -553,7 +554,7 @@ describe('CampaignOrchestrator', () => {
       const orchestrator = new CampaignOrchestrator({
         prisma,
         llm,
-        buildSourcingProvider: () => provider,
+        buildSourcingProvider: async () => provider,
         emitEvent,
         runResearch: research,
       });
@@ -617,7 +618,7 @@ describe('CampaignOrchestrator', () => {
       const orchestrator = new CampaignOrchestrator({
         prisma,
         llm,
-        buildSourcingProvider: () => provider,
+        buildSourcingProvider: async () => provider,
         emitEvent,
         runResearch: research,
         // Serialize so the budget ledger trips deterministically.
@@ -663,7 +664,7 @@ describe('CampaignOrchestrator', () => {
       const orchestrator = new CampaignOrchestrator({
         prisma,
         llm,
-        buildSourcingProvider: () => provider,
+        buildSourcingProvider: async () => provider,
         emitEvent,
         runResearch: research,
       });
@@ -700,7 +701,7 @@ describe('CampaignOrchestrator', () => {
       const orchestrator = new CampaignOrchestrator({
         prisma,
         llm,
-        buildSourcingProvider: () => provider,
+        buildSourcingProvider: async () => provider,
         emitEvent,
         runResearch: makeRunResearch(() => researchCompleted('d1')),
       });
@@ -739,7 +740,7 @@ describe('CampaignOrchestrator', () => {
       const orchestrator = new CampaignOrchestrator({
         prisma,
         llm,
-        buildSourcingProvider: () => {
+        buildSourcingProvider: async () => {
           throw new Error('Apollo sourcing is not configured.');
         },
         emitEvent,
@@ -764,6 +765,40 @@ describe('CampaignOrchestrator', () => {
       ]);
     });
 
+    it('completes gracefully (not failed) when sourcing is unavailable (e.g. Apollo not connected)', async () => {
+      const prisma = makeFakePrisma();
+      const llm = makeFakeLlm(() => ({ text: icpJson() }));
+
+      const orchestrator = new CampaignOrchestrator({
+        prisma,
+        llm,
+        buildSourcingProvider: async () => {
+          throw new SourcingUnavailableError('Connect Apollo to discover companies.');
+        },
+        emitEvent,
+        runResearch: makeRunResearch(() => researchCompleted('d1')),
+      });
+
+      const result = await orchestrator.run({
+        campaignId: 'camp-src-unavailable',
+        orgId: 'org-1',
+        triggeredBy: 'user-1',
+        goal: 'g',
+        winsListId: null,
+        budgetCents: 1000,
+      });
+
+      // User-fixable → completed with zero candidates, not failed.
+      expect(result.status).toBe('completed');
+      expect(result.candidateCount).toBe(0);
+      expect(types()).toEqual([
+        'campaign_started',
+        'icp_derived',
+        'sourcing_completed',
+        'campaign_completed',
+      ]);
+    });
+
     it('marks the ICP AgentRun failed (terminal) when the ICP model call throws', async () => {
       const prisma = makeFakePrisma();
       const llm: LlmProvider = {
@@ -777,7 +812,7 @@ describe('CampaignOrchestrator', () => {
       const orchestrator = new CampaignOrchestrator({
         prisma,
         llm,
-        buildSourcingProvider: () => makeSourcingProvider([]),
+        buildSourcingProvider: async () => makeSourcingProvider([]),
         emitEvent,
         runResearch: makeRunResearch(() => researchCompleted('d1')),
       });
@@ -822,7 +857,7 @@ describe('CampaignOrchestrator', () => {
       const orchestrator = new CampaignOrchestrator({
         prisma,
         llm,
-        buildSourcingProvider: () => provider,
+        buildSourcingProvider: async () => provider,
         emitEvent,
         runResearch: research,
       });
@@ -862,7 +897,7 @@ describe('CampaignOrchestrator', () => {
       const orchestrator = new CampaignOrchestrator({
         prisma,
         llm,
-        buildSourcingProvider: () => provider,
+        buildSourcingProvider: async () => provider,
         emitEvent,
         runResearch: research,
       });
@@ -898,7 +933,7 @@ describe('CampaignOrchestrator', () => {
       const orchestrator = new CampaignOrchestrator({
         prisma,
         llm,
-        buildSourcingProvider: () => provider,
+        buildSourcingProvider: async () => provider,
         emitEvent,
         runResearch: research,
       });
@@ -937,7 +972,7 @@ describe('CampaignOrchestrator', () => {
       const orchestrator = new CampaignOrchestrator({
         prisma,
         llm,
-        buildSourcingProvider: () => provider,
+        buildSourcingProvider: async () => provider,
         emitEvent,
         runResearch: research,
       });
@@ -992,7 +1027,7 @@ describe('CampaignOrchestrator', () => {
       const orchestrator = new CampaignOrchestrator({
         prisma,
         llm,
-        buildSourcingProvider: () => provider,
+        buildSourcingProvider: async () => provider,
         emitEvent,
         runResearch: research,
       });
@@ -1040,7 +1075,7 @@ describe('CampaignOrchestrator', () => {
       const orchestrator = new CampaignOrchestrator({
         prisma,
         llm,
-        buildSourcingProvider: () => provider,
+        buildSourcingProvider: async () => provider,
         emitEvent,
         runResearch: research,
       });
@@ -1081,7 +1116,7 @@ describe('CampaignOrchestrator', () => {
       const orchestrator = new CampaignOrchestrator({
         prisma,
         llm,
-        buildSourcingProvider: () => provider,
+        buildSourcingProvider: async () => provider,
         emitEvent,
         runResearch: research,
       });

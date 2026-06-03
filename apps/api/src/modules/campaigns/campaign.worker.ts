@@ -8,7 +8,25 @@ import {
   type RunEventBus,
 } from '../teammates/runtime/run-event-bus';
 import { ContactListSourcingProvider } from '../connectors/sourcing/contact-list-sourcing.provider';
-import type { SourcingProvider } from '../connectors/sourcing/sourcing-provider';
+import {
+  ApolloSourcingProvider,
+  type ApolloOrgSearcher,
+} from '../connectors/sourcing/apollo-sourcing.provider';
+import {
+  SourcingUnavailableError,
+  type SourcingProvider,
+} from '../connectors/sourcing/sourcing-provider';
+import { apolloSourceAdapter } from '../connectors/adapters/apollo/apollo.source';
+import {
+  CredentialManager,
+  CredentialManagerError,
+  type CredentialManagerErrorCode,
+} from '../connectors/credential-manager';
+import {
+  isApolloAllowed,
+  resolveDeploymentMode,
+  type DeploymentMode,
+} from '../../common/deployment';
 import {
   CampaignOrchestrator,
   CAMPAIGN_TEAMMATE,
@@ -51,17 +69,20 @@ export class CampaignWorker implements OnModuleInit {
   private readonly prisma: PrismaService;
   private readonly resolver: LlmResolver;
   private readonly eventBus: RunEventBus;
+  private readonly credentials: CredentialManager;
 
   constructor(
     @Inject(QueueService) queue: QueueService,
     @Inject(PrismaService) prisma: PrismaService,
     @Inject(LlmResolver) resolver: LlmResolver,
     @Inject(RUN_EVENT_BUS) eventBus: RunEventBus,
+    @Inject(CredentialManager) credentials: CredentialManager,
   ) {
     this.queue = queue;
     this.prisma = prisma;
     this.resolver = resolver;
     this.eventBus = eventBus;
+    this.credentials = credentials;
   }
 
   async onModuleInit(): Promise<void> {
@@ -83,7 +104,12 @@ export class CampaignWorker implements OnModuleInit {
             prisma: this.prisma,
             llm: provider,
             buildSourcingProvider: (orgId) =>
-              buildSourcingProvider(this.prisma, orgId, data.sourcing),
+              buildSourcingProvider(
+                this.prisma,
+                this.credentials,
+                orgId,
+                data.sourcing,
+              ),
             // CampaignEvents ride the same bus the teammate runtime uses.
             // toBusEvent stamps runId=campaignId so the bus (which routes by
             // runId) delivers them to the stream subscribed by campaignId.
@@ -118,26 +144,86 @@ export class CampaignWorker implements OnModuleInit {
 
 /**
  * Build the sourcing provider for a campaign from its SourcingConfig.
- *   - null → no source attached; returns null. The orchestrator derives the ICP
- *     and prompts for a source instead of qualifying (sourcing is optional).
  *   - contact_list → the no-key ContactListSourcingProvider (ships today).
- *   - apollo → reserved; throws a clear "not configured" error. The vendor SDK
- *     would live behind an adapter per invariant #5 when it lands.
+ *   - apollo (explicit) → live company discovery; throws SourcingUnavailableError
+ *     if Apollo isn't connected.
+ *   - null (no source attached) → AUTO-DISCOVERY: if the org has connected
+ *     Apollo, discover from the ICP automatically ("type a goal → ranked
+ *     companies"); otherwise return null so the orchestrator prompts the user.
+ *
+ * Apollo is gated to self-hosted installs (see common/deployment.ts): on Cloud,
+ * an explicit apollo source surfaces a SourcingUnavailableError and auto-discovery
+ * skips Apollo entirely. Apollo paths load + decrypt the key at the credential
+ * boundary (invariant #6); a benign, user-fixable problem (not connected / key
+ * rejected / circuit open) throws `SourcingUnavailableError`, which the
+ * orchestrator surfaces gracefully rather than failing the campaign.
  */
-export function buildSourcingProvider(
+export async function buildSourcingProvider(
   prisma: PrismaService,
+  credentials: CredentialManager,
   orgId: string,
   sourcing: SourcingConfig | null,
-): SourcingProvider | null {
-  if (sourcing === null) {
-    return null;
-  }
-  if (sourcing.provider === 'contact_list') {
+  // Injectable for tests; production uses the registered Apollo adapter singleton.
+  apolloAdapter: ApolloOrgSearcher = apolloSourceAdapter,
+  // Defaults to the env-resolved mode; tests pass it explicitly.
+  deploymentMode: DeploymentMode = resolveDeploymentMode(),
+): Promise<SourcingProvider | null> {
+  if (sourcing?.provider === 'contact_list') {
     return new ContactListSourcingProvider(prisma, orgId, sourcing.listId);
   }
-  // sourcing.provider === 'apollo'
-  throw new Error(
-    'Apollo sourcing is not configured. Only the contact_list provider is ' +
-      'available today; attach an imported ContactList as the candidate pool.',
+
+  // Apollo discovery is self-host-only (vendor ToS). On Cloud, an explicit
+  // request is a clear "not here" message; auto-discovery just skips it.
+  if (!isApolloAllowed(deploymentMode)) {
+    if (sourcing?.provider === 'apollo') {
+      throw new SourcingUnavailableError(
+        'Apollo discovery is available on self-hosted getbeyond only.',
+      );
+    }
+    return null;
+  }
+
+  // Explicit apollo, OR no source attached (auto-discovery) → try Apollo.
+  const account = await prisma.connectorAccount.findUnique({
+    where: { orgId_kind: { orgId, kind: 'apollo' } },
+    select: { id: true },
+  });
+  if (!account) {
+    if (sourcing?.provider === 'apollo') {
+      // The user explicitly chose Apollo but hasn't connected it.
+      throw new SourcingUnavailableError(
+        'Connect Apollo to discover companies matching your ICP.',
+      );
+    }
+    // No explicit source and no discovery provider connected → prompt.
+    return null;
+  }
+
+  let creds;
+  try {
+    creds = await credentials.load(account.id);
+  } catch (err) {
+    if (err instanceof CredentialManagerError) {
+      throw new SourcingUnavailableError(apolloUnavailableMessage(err.code));
+    }
+    throw err;
+  }
+  return new ApolloSourcingProvider(
+    apolloAdapter,
+    creds,
+    account.id,
+    credentials,
   );
+}
+
+/** Map a credential-load failure to an action-oriented user message. */
+function apolloUnavailableMessage(code: CredentialManagerErrorCode): string {
+  switch (code) {
+    case 'expired':
+      return 'Your Apollo key was rejected — reconnect Apollo to keep discovering companies.';
+    case 'circuit_broken':
+      return 'Apollo is temporarily unavailable (too many recent errors). Try again shortly.';
+    default:
+      return 'Apollo isn’t connected. Connect Apollo to discover companies.';
+  }
 }

@@ -3,6 +3,7 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
 import { QueueModule } from '../queue/queue.module';
 import { TeammatesModule } from '../teammates/teammates.module';
+import { ConnectorsModule } from '../connectors/connectors.module';
 import { CampaignController } from './campaign.controller';
 import { CampaignService } from './campaign.service';
 import { CampaignWorker } from './campaign.worker';
@@ -17,7 +18,13 @@ import { CampaignWorker } from './campaign.worker';
  * exported by TeammatesModule.
  */
 @Module({
-  imports: [PrismaModule, QueueModule, AuthModule, TeammatesModule],
+  imports: [
+    PrismaModule,
+    QueueModule,
+    AuthModule,
+    TeammatesModule,
+    ConnectorsModule,
+  ],
   controllers: [CampaignController],
   providers: [CampaignService, CampaignWorker],
 })

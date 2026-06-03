@@ -7,6 +7,7 @@ import type { CampaignStatus, CampaignSummary } from '@getbeyond/shared';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { CampaignComposer } from '@/components/CampaignComposer';
+import { ConnectApolloBanner } from '@/components/ConnectApolloBanner';
 import { ApiError, listCampaigns } from '@/lib/api-client';
 import { formatRelativeTime } from '@/lib/campaign-transcript';
 import { useIdentity } from '@/lib/use-identity';
@@ -121,6 +122,8 @@ function CampaignsHome(): React.JSX.Element {
 
       <CampaignComposer variant="hero" autoFocus />
 
+      <ConnectApolloBanner />
+
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-foreground">
@@ -160,7 +163,7 @@ function CampaignList({ state }: { state: ListState }): React.JSX.Element {
         <p className="text-sm font-medium text-foreground">No campaigns yet</p>
         <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
           Start your first campaign with the box above — describe your goal and
-          point it at a source list.
+          we&apos;ll discover matching companies once Apollo is connected.
         </p>
       </div>
     );

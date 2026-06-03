@@ -19,7 +19,8 @@ import type {
  */
 const SourcingConfigSchema = z.discriminatedUnion('provider', [
   z.object({ provider: z.literal('contact_list'), listId: z.string().min(1) }),
-  z.object({ provider: z.literal('apollo'), reserved: z.literal(true) }),
+  // Apollo discovery takes no extra config — the derived ICP is the query.
+  z.object({ provider: z.literal('apollo') }),
 ]);
 
 export const CreateCampaignRequestSchema = z.object({

@@ -14,12 +14,11 @@ import { useIdentity } from '@/lib/use-identity';
  * on submit we POST a CreateCampaignRequest and route to the campaign's chat
  * workspace, where the SSE stream renders live.
  *
- * Chat-first: the goal is the only required field. A campaign can start with
- * just a goal — it derives + shows the ICP and then prompts for a source.
- * Sourcing is OPTIONAL (CreateCampaignRequest.sourcing): attach a contact list
- * via the SourcePicker to find candidates, and optionally point the ICP at a
- * separate closed-won wins list. Lists are picked, never pasted as raw ids.
- * Apollo sourcing is reserved (BYO key) and not offered yet.
+ * Chat-first: the goal is the only required field. A campaign starts with just
+ * the goal (and optionally a closed-won wins list to point the ICP at) — it
+ * derives + shows the ICP and then prompts for a source. The candidate source
+ * is attached later in the Prospects workspace, not here, to keep the composer
+ * a single calm input. Lists are picked, never pasted as raw ids.
  *
  * Two visual modes:
  *  - `variant="hero"` — the prominent home-screen composer (large textarea).
@@ -39,7 +38,6 @@ export function CampaignComposer({
   const { status } = useIdentity();
   const [goal, setGoal] = useState('');
   const [winsListId, setWinsListId] = useState<string | null>(null);
-  const [sourceListId, setSourceListId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,10 +53,9 @@ export function CampaignComposer({
 
     const payload: CreateCampaignRequest = {
       goal: goal.trim(),
-      sourcing:
-        sourceListId !== null
-          ? { provider: 'contact_list', listId: sourceListId }
-          : null,
+      // The candidate source is attached later in the Prospects workspace, not
+      // from the composer — start with the goal (+ optional wins list) only.
+      sourcing: null,
       winsListId,
     };
 
@@ -96,15 +93,7 @@ export function CampaignComposer({
             }
           }}
         />
-        <div className="mt-3 grid grid-cols-1 gap-4 border-t pt-3 sm:grid-cols-2">
-          <SourcePicker
-            label="Source"
-            hint="(optional — candidate pool)"
-            noneLabel="None — derive ICP only"
-            value={sourceListId}
-            onChange={setSourceListId}
-            disabled={submitting}
-          />
+        <div className="mt-3 border-t pt-3">
           <SourcePicker
             label="Wins list"
             hint="(optional — derives ICP)"

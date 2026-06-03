@@ -40,6 +40,12 @@ export interface CsvImportInput {
   /** userId of the operator that triggered the import. Stored on SyncRun. */
   triggeredBy: string;
   /**
+   * Display name for the ContactList created from this import. Defaults to
+   * DEFAULT_IMPORT_LIST_NAME when omitted or blank. The controller passes the
+   * uploaded filename here so the list is recognizable in the picker.
+   */
+  listName?: string;
+  /**
    * Reuse an existing SyncRun (the async producer / worker pattern). When
    * omitted, runCsvImport creates a new SyncRun. When provided, the SyncRun
    * must already exist; runCsvImport transitions it from `running` → terminal.
@@ -61,7 +67,16 @@ export interface CsvImportResult {
   recordsOut: number;
   errorCount: number;
   errors: CsvImportError[];
+  /**
+   * The ContactList created to hold the imported contacts, or `null` when the
+   * import produced zero contacts (no point in an empty list). This list is
+   * what campaigns source candidates from.
+   */
+  listId: string | null;
 }
+
+/** Fallback ContactList name when the caller supplies none. */
+export const DEFAULT_IMPORT_LIST_NAME = 'Imported contacts';
 
 export async function runCsvImport(
   prisma: PrismaClient,
@@ -91,6 +106,10 @@ export async function runCsvImport(
   let yieldedCount = 0;
   let upsertedCount = 0;
   let adapterErrorCount = 0;
+  // Distinct Contact ids upserted this run. A Set because cross-row dedup
+  // (two rows → same normalizedEmail → one Contact) must not produce two
+  // ContactListMember rows for the same contact.
+  const memberContactIds = new Set<string>();
 
   const onRowError = (e: CsvRowError): void => {
     adapterErrorCount++;
@@ -101,6 +120,8 @@ export async function runCsvImport(
       rawRow: e.rawRow,
     });
   };
+
+  let listId: string | null = null;
 
   const adapter = getSourceAdapter('csv');
   const adapterConfig: CsvSourceConfig = {
@@ -117,7 +138,7 @@ export async function runCsvImport(
     })) {
       yieldedCount++;
       try {
-        await upsertContact(prisma, {
+        const upserted = await upsertContact(prisma, {
           orgId: input.orgId,
           emailRaw: contact.emailRaw,
           sourceAccountId: input.sourceAccountId,
@@ -134,6 +155,7 @@ export async function runCsvImport(
           rawPayload: contact.rawPayload as Prisma.InputJsonValue,
         });
         upsertedCount++;
+        memberContactIds.add(upserted.contact.id);
       } catch (err) {
         if (err instanceof InvalidEmailError) {
           errors.push({
@@ -145,6 +167,21 @@ export async function runCsvImport(
         }
         throw err;
       }
+    }
+
+    // Group the imported contacts into a ContactList so campaigns have a
+    // candidate pool to source from. Skip when nothing was imported — an
+    // empty list is just clutter. List + members are written in one
+    // transaction; a failure here lands in the same catch below and marks
+    // the SyncRun failed (no half-built list left behind).
+    if (memberContactIds.size > 0) {
+      listId = await createImportList(prisma, {
+        orgId: input.orgId,
+        syncRunId: syncRun.id,
+        name: input.listName?.trim() || DEFAULT_IMPORT_LIST_NAME,
+        createdBy: input.triggeredBy,
+        contactIds: [...memberContactIds],
+      });
     }
   } catch (err) {
     syncRun = await prisma.syncRun.update({
@@ -187,5 +224,45 @@ export async function runCsvImport(
     recordsOut: upsertedCount,
     errorCount: errors.length,
     errors,
+    listId,
   };
+}
+
+/**
+ * Create the ContactList + members for one CSV import, in a single
+ * transaction so a crash never leaves a list with a wrong contactCount or
+ * partial membership. `source` ties the list back to its SyncRun
+ * (`csv:upload:{syncRunId}`); contactIds are already de-duplicated by the
+ * caller, so `skipDuplicates` is only belt-and-suspenders against the
+ * composite PK.
+ */
+async function createImportList(
+  prisma: PrismaClient,
+  args: {
+    orgId: string;
+    syncRunId: string;
+    name: string;
+    createdBy: string;
+    contactIds: string[];
+  },
+): Promise<string> {
+  return prisma.$transaction(async (tx) => {
+    const list = await tx.contactList.create({
+      data: {
+        orgId: args.orgId,
+        source: `csv:upload:${args.syncRunId}`,
+        name: args.name,
+        createdBy: args.createdBy,
+        contactCount: args.contactIds.length,
+      },
+    });
+    await tx.contactListMember.createMany({
+      data: args.contactIds.map((contactId) => ({
+        listId: list.id,
+        contactId,
+      })),
+      skipDuplicates: true,
+    });
+    return list.id;
+  });
 }

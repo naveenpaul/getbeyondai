@@ -45,6 +45,8 @@ import {
 interface ParsedMultipart {
   fileBuffer: Buffer;
   metadata: CsvImportMetadata;
+  /** Original uploaded filename, used as the default ContactList name. */
+  filename: string | undefined;
 }
 
 @Controller('connectors/csv')
@@ -115,7 +117,7 @@ export class CsvImportController {
     @Req() req: FastifyRequest,
     @CurrentUser() user: CurrentUserPayload,
   ): Promise<CsvImportEnqueueResponse> {
-    const { fileBuffer, metadata } = await parseMultipart(req);
+    const { fileBuffer, metadata, filename } = await parseMultipart(req);
 
     const account = await this.prisma.connectorAccount.findUnique({
       where: { id: metadata.sourceAccountId },
@@ -163,6 +165,10 @@ export class CsvImportController {
       csv,
       columnMapping: metadata.columnMapping,
       triggeredBy: user.userId,
+      // Explicit name wins; otherwise fall back to the uploaded filename
+      // (extension stripped). runCsvImport applies a generic default if both
+      // are absent.
+      listName: metadata.listName ?? stripCsvExtension(filename),
     });
 
     return { syncRunId: syncRun.id, status: 'running' };
@@ -225,10 +231,12 @@ async function parseMultipart(req: FastifyRequest): Promise<ParsedMultipart> {
 
   let fileBuffer: Buffer | undefined;
   let metadataRaw: string | undefined;
+  let filename: string | undefined;
 
   for await (const part of req.parts()) {
     if (part.type === 'file') {
       if (part.fieldname === 'file') {
+        filename = part.filename;
         const chunks: Buffer[] = [];
         for await (const chunk of part.file) {
           chunks.push(chunk as Buffer);
@@ -276,5 +284,17 @@ async function parseMultipart(req: FastifyRequest): Promise<ParsedMultipart> {
     );
   }
 
-  return { fileBuffer, metadata: result.data };
+  return { fileBuffer, metadata: result.data, filename };
+}
+
+/**
+ * Strip a trailing `.csv` (case-insensitive) so the default ContactList name
+ * reads as "Q2 prospects", not "Q2 prospects.csv". Returns undefined for an
+ * absent or blank filename so runCsvImport applies its generic default.
+ */
+function stripCsvExtension(filename: string | undefined): string | undefined {
+  if (!filename) return undefined;
+  const trimmed = filename.trim();
+  if (trimmed === '') return undefined;
+  return trimmed.replace(/\.csv$/i, '');
 }

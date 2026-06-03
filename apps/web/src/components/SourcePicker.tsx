@@ -1,12 +1,16 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import Link from 'next/link';
-import { AlertCircle, Loader2, Plug, Upload } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { AlertCircle, Loader2, Plug, Upload, X } from 'lucide-react';
 import type { ContactListSummary } from '@getbeyond/shared';
 import { Badge } from '@/components/ui/badge';
 import { listContactLists } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
+import {
+  CsvImportFlow,
+  type CsvImportResultInfo,
+} from '@/components/CsvImportFlow';
 
 /**
  * Picks one of the org's imported contact lists for a campaign (the candidate
@@ -78,12 +82,20 @@ export function SourcePicker({
   id,
 }: SourcePickerProps): React.JSX.Element {
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
+  const [importOpen, setImportOpen] = useState(false);
+
+  // Single fetch helper, reused by the initial load and the post-import
+  // refresh. Throws on failure so each caller decides how to surface it.
+  const fetchLists = useCallback(async (): Promise<ContactListSummary[]> => {
+    const { items } = await listContactLists();
+    return items;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const { items } = await listContactLists();
+        const items = await fetchLists();
         if (!cancelled) setState({ kind: 'ready', lists: items });
       } catch (err) {
         if (!cancelled) {
@@ -97,7 +109,35 @@ export function SourcePicker({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [fetchLists]);
+
+  // Close the import modal on Escape.
+  useEffect(() => {
+    if (!importOpen) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setImportOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [importOpen]);
+
+  // After an in-context import completes, refresh the dropdown and auto-select
+  // the freshly-created list (matched by its `csv:upload:{syncRunId}` source) so
+  // the user lands back on the campaign with the source already chosen.
+  async function onImported(result: CsvImportResultInfo): Promise<void> {
+    if (result.status.status !== 'completed') return;
+    try {
+      const items = await fetchLists();
+      setState({ kind: 'ready', lists: items });
+      const created = items.find(
+        (l) => l.source === `csv:upload:${result.syncRunId}`,
+      );
+      if (created) onChange(created.id);
+    } catch {
+      // Non-fatal: the import succeeded; the list just isn't auto-selected.
+      // It will appear the next time the picker loads.
+    }
+  }
 
   const selectId = id ?? `source-picker-${label.replace(/\s+/g, '-').toLowerCase()}`;
   const hasLists = state.kind === 'ready' && state.lists.length > 0;
@@ -166,16 +206,18 @@ export function SourcePicker({
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2 pt-0.5">
-        <Link
-          href="/contacts/import"
+        <button
+          type="button"
+          onClick={() => setImportOpen(true)}
+          disabled={disabled}
           className={cn(
-            'inline-flex items-center gap-1.5 rounded-md border border-input px-2.5 py-1 text-xs font-medium hover:bg-muted',
+            'inline-flex items-center gap-1.5 rounded-md border border-input px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50',
             !hasLists && state.kind === 'ready' ? 'border-foreground/30' : '',
           )}
         >
           <Upload className="h-3.5 w-3.5" />
           Import CSV
-        </Link>
+        </button>
         {/* HubSpot connect is a fetch-then-redirect OAuth flow with a callback
             landing the web app doesn't have yet — not a navigable link. Shown
             disabled until that flow is wired; once connected, HubSpot-synced
@@ -189,6 +231,48 @@ export function SourcePicker({
           Connect HubSpot (soon)
         </span>
       </div>
+
+      {importOpen && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Import contacts from CSV"
+              onClick={(e) => {
+                if (e.target === e.currentTarget) setImportOpen(false);
+              }}
+              className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:p-8"
+            >
+              <div className="my-4 w-full max-w-2xl rounded-xl border bg-card p-5 shadow-lg">
+                <div className="mb-4 flex items-center justify-between">
+                  <h2 className="text-base font-semibold">
+                    Import contacts from CSV
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => setImportOpen(false)}
+                    aria-label="Close"
+                    className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <p className="mb-4 text-xs text-muted-foreground">
+                  We&apos;ll import into a new list and select it here — your
+                  campaign stays as-is.
+                </p>
+                <CsvImportFlow
+                  onComplete={(r) => void onImported(r)}
+                  primaryAction={{
+                    label: 'Done',
+                    onClick: () => setImportOpen(false),
+                  }}
+                />
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

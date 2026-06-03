@@ -12,6 +12,11 @@ import { z } from 'zod';
  */
 export const CsvImportMetadataSchema = z.object({
   sourceAccountId: z.string().min(1, 'sourceAccountId is required'),
+  /**
+   * Display name for the ContactList this import creates. When omitted the
+   * controller falls back to the uploaded filename, then to a generic default.
+   */
+  listName: z.string().min(1).max(200).optional(),
   columnMapping: z.object({
     email: z.string().min(1, 'columnMapping.email is required'),
     firstName: z.string().min(1).optional(),

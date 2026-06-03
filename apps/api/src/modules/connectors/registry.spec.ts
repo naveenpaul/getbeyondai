@@ -7,6 +7,7 @@ import {
 } from './registry';
 import { csvSourceAdapter } from './adapters/csv.source';
 import { hubspotSourceAdapter } from './adapters/hubspot.source';
+import { apolloSourceAdapter } from './adapters/apollo/apollo.source';
 
 describe('source-adapter registry', () => {
   it('returns the CSV adapter for kind=csv', () => {
@@ -17,8 +18,12 @@ describe('source-adapter registry', () => {
     expect(getSourceAdapter('hubspot')).toBe(hubspotSourceAdapter);
   });
 
+  it('returns the Apollo adapter for kind=apollo', () => {
+    expect(getSourceAdapter('apollo')).toBe(apolloSourceAdapter);
+  });
+
   it('throws UnknownConnectorError for kinds not yet registered', () => {
-    for (const kind of ['salesforce', 'apollo', 'zoominfo'] as const) {
+    for (const kind of ['salesforce', 'zoominfo'] as const) {
       try {
         getSourceAdapter(kind);
         expect.fail(`should have thrown for ${kind}`);
@@ -40,12 +45,12 @@ describe('source-adapter registry', () => {
   it('isRegisteredSource reflects registry state', () => {
     expect(isRegisteredSource('csv')).toBe(true);
     expect(isRegisteredSource('hubspot')).toBe(true);
+    expect(isRegisteredSource('apollo')).toBe(true);
     expect(isRegisteredSource('salesforce')).toBe(false);
-    expect(isRegisteredSource('apollo')).toBe(false);
     expect(isRegisteredSource('zoominfo')).toBe(false);
   });
 
   it('listRegisteredSources returns only the connectors that are wired', () => {
-    expect(listRegisteredSources().sort()).toEqual(['csv', 'hubspot']);
+    expect(listRegisteredSources().sort()).toEqual(['apollo', 'csv', 'hubspot']);
   });
 });

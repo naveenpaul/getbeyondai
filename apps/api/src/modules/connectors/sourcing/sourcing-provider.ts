@@ -55,6 +55,25 @@ export interface FindCandidatesOptions {
   limit?: number;
 }
 
+/**
+ * Thrown by the provider factory when a campaign's configured source can't be
+ * used for a benign, user-fixable reason — e.g. the org hasn't connected Apollo,
+ * or its key expired / tripped the circuit breaker. The orchestrator treats this
+ * as a graceful "no candidates, here's what to do" outcome (it surfaces
+ * `userMessage` on the stream and completes the campaign) rather than a hard
+ * `campaign_failed`. Genuinely unexpected errors (DB down) must NOT use this —
+ * they should bubble so pg-boss retries.
+ */
+export class SourcingUnavailableError extends Error {
+  /** Short, action-oriented message safe to show the end user. */
+  readonly userMessage: string;
+  constructor(userMessage: string) {
+    super(userMessage);
+    this.name = 'SourcingUnavailableError';
+    this.userMessage = userMessage;
+  }
+}
+
 /** Produces a candidate pool for a campaign. One instance is bound per run. */
 export interface SourcingProvider {
   /** Stable identifier surfaced in the connected-tools sidebar + audit log. */

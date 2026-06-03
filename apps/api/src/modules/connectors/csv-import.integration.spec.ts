@@ -114,6 +114,132 @@ describe.skipIf(!DATABASE_URL)(
       );
     });
 
+    it('happy path also creates a ContactList of all imported contacts', async () => {
+      const csv = [
+        'Email,First Name,Company',
+        'sarah@acme.com,Sarah,Acme',
+        'tom@beta.com,Tom,Beta',
+        'priya@gamma.org,Priya,Gamma',
+      ].join('\n');
+
+      const result = await runCsvImport(prisma, {
+        orgId: orgA,
+        sourceAccountId: csvAccountA,
+        csv: { kind: 'string', content: csv },
+        columnMapping: { email: 'Email', firstName: 'First Name', company: 'Company' },
+        triggeredBy: 'usr_test',
+        listName: 'Q2 prospects',
+      });
+
+      expect(result.listId).not.toBeNull();
+
+      const list = await prisma.contactList.findUniqueOrThrow({
+        where: { id: result.listId! },
+      });
+      expect(list.orgId).toBe(orgA);
+      expect(list.name).toBe('Q2 prospects');
+      expect(list.source).toBe(`csv:upload:${result.syncRun.id}`);
+      expect(list.createdBy).toBe('usr_test');
+      expect(list.contactCount).toBe(3);
+
+      const members = await prisma.contactListMember.findMany({
+        where: { listId: list.id },
+      });
+      expect(members).toHaveLength(3);
+
+      // Every imported Contact is a member of the list.
+      const contacts = await prisma.contact.findMany({ where: { orgId: orgA } });
+      expect(members.map((m) => m.contactId).sort()).toEqual(
+        contacts.map((c) => c.id).sort(),
+      );
+    });
+
+    it('list name defaults when none supplied', async () => {
+      const result = await runCsvImport(prisma, {
+        orgId: orgA,
+        sourceAccountId: csvAccountA,
+        csv: { kind: 'string', content: ['Email', 'sarah@acme.com'].join('\n') },
+        columnMapping: { email: 'Email' },
+        triggeredBy: 'usr_test',
+      });
+
+      const list = await prisma.contactList.findUniqueOrThrow({
+        where: { id: result.listId! },
+      });
+      expect(list.name).toBe('Imported contacts');
+    });
+
+    it('same email twice in one CSV → list has one member, count 1', async () => {
+      const csv = [
+        'Email',
+        'sarah@acme.com',
+        'SARAH+work@acme.com',
+      ].join('\n');
+
+      const result = await runCsvImport(prisma, {
+        orgId: orgA,
+        sourceAccountId: csvAccountA,
+        csv: { kind: 'string', content: csv },
+        columnMapping: { email: 'Email' },
+        triggeredBy: 'usr_test',
+      });
+
+      const list = await prisma.contactList.findUniqueOrThrow({
+        where: { id: result.listId! },
+      });
+      expect(list.contactCount).toBe(1);
+      const members = await prisma.contactListMember.findMany({
+        where: { listId: list.id },
+      });
+      expect(members).toHaveLength(1);
+    });
+
+    it('import with zero valid contacts creates no list', async () => {
+      const result = await runCsvImport(prisma, {
+        orgId: orgA,
+        sourceAccountId: csvAccountA,
+        csv: { kind: 'string', content: ['Email', 'malformed', ''].join('\n') },
+        columnMapping: { email: 'Email' },
+        triggeredBy: 'usr_test',
+      });
+
+      expect(result.recordsOut).toBe(0);
+      expect(result.listId).toBeNull();
+      const lists = await prisma.contactList.findMany({ where: { orgId: orgA } });
+      expect(lists).toHaveLength(0);
+    });
+
+    it('each import creates its own list (re-import → two lists)', async () => {
+      const csv = ['Email', 'sarah@acme.com', 'tom@beta.com'].join('\n');
+      const mapping = { email: 'Email' };
+
+      const r1 = await runCsvImport(prisma, {
+        orgId: orgA,
+        sourceAccountId: csvAccountA,
+        csv: { kind: 'string', content: csv },
+        columnMapping: mapping,
+        triggeredBy: 'usr_test',
+      });
+      const r2 = await runCsvImport(prisma, {
+        orgId: orgA,
+        sourceAccountId: csvAccountA,
+        csv: { kind: 'string', content: csv },
+        columnMapping: mapping,
+        triggeredBy: 'usr_test',
+      });
+
+      expect(r1.listId).not.toBe(r2.listId);
+      const lists = await prisma.contactList.findMany({ where: { orgId: orgA } });
+      expect(lists).toHaveLength(2);
+      // Both lists reference the same two contacts (cross-import dedup of Contacts).
+      for (const listId of [r1.listId!, r2.listId!]) {
+        const members = await prisma.contactListMember.findMany({
+          where: { listId },
+        });
+        expect(members).toHaveLength(2);
+      }
+    });
+
     it('mixed valid + invalid rows: bad rows in errors, valid ones in DB', async () => {
       const csv = [
         'Email,Name',

@@ -18,13 +18,14 @@ export type CampaignStatus = 'draft' | 'running' | 'completed' | 'failed';
 
 // ─── Sourcing config (where the candidate pool comes from) ──────────
 //
-// Discriminated by provider. Only `contact_list` (no-key: an imported
-// ContactList) ships today; `apollo` is reserved for the firmographic-search
-// adapter that lands with a BYO key.
+// Discriminated by provider:
+//   - `contact_list` (no-key): qualify+rank an imported ContactList.
+//   - `apollo` (BYO key): live company discovery — the derived ICP drives an
+//     Apollo Organization Search. No extra config; the ICP IS the query.
 
 export type SourcingConfig =
   | { provider: 'contact_list'; listId: string }
-  | { provider: 'apollo'; reserved: true };
+  | { provider: 'apollo' };
 
 // ─── POST /campaigns ────────────────────────────────────────────────
 //
