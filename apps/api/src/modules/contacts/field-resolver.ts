@@ -17,15 +17,16 @@ export type SourceTier =
   | 'salesforce'
   | 'apollo'
   | 'zoominfo'
+  | 'snov'
   | 'csv';
 
 /**
  * Tier ladder. Higher number = higher precedence.
  *
- *   manual (100)            user-typed; sticky against all vendor sources
- *   hubspot / salesforce 50 system-of-record CRMs (user owns + edits in them)
- *   apollo / zoominfo    25 data vendors (enrichment-only, lower trust)
- *   csv                  10 user-supplied bulk import, no auth, lowest trust
+ *   manual (100)              user-typed; sticky against all vendor sources
+ *   hubspot / salesforce 50   system-of-record CRMs (user owns + edits in them)
+ *   apollo / zoominfo / snov  25 data vendors (enrichment-only, lower trust)
+ *   csv                  10   user-supplied bulk import, no auth, lowest trust
  */
 export const TIER_PRECEDENCE: Readonly<Record<SourceTier, number>> = {
   manual: 100,
@@ -33,6 +34,7 @@ export const TIER_PRECEDENCE: Readonly<Record<SourceTier, number>> = {
   salesforce: 50,
   apollo: 25,
   zoominfo: 25,
+  snov: 25,
   csv: 10,
 };
 
@@ -137,7 +139,7 @@ export function resolveFieldUpdates(
  * checker can spot any future enum drift.
  */
 export function tierFromConnectorKind(
-  kind: 'hubspot' | 'salesforce' | 'apollo' | 'zoominfo' | 'csv',
+  kind: 'hubspot' | 'salesforce' | 'apollo' | 'zoominfo' | 'snov' | 'csv',
 ): SourceTier {
   return kind;
 }

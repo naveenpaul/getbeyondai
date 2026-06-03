@@ -46,11 +46,17 @@ describe('source-adapter registry', () => {
     expect(isRegisteredSource('csv')).toBe(true);
     expect(isRegisteredSource('hubspot')).toBe(true);
     expect(isRegisteredSource('apollo')).toBe(true);
+    expect(isRegisteredSource('snov')).toBe(true);
     expect(isRegisteredSource('salesforce')).toBe(false);
     expect(isRegisteredSource('zoominfo')).toBe(false);
   });
 
   it('listRegisteredSources returns only the connectors that are wired', () => {
-    expect(listRegisteredSources().sort()).toEqual(['apollo', 'csv', 'hubspot']);
+    expect(listRegisteredSources().sort()).toEqual([
+      'apollo',
+      'csv',
+      'hubspot',
+      'snov',
+    ]);
   });
 });

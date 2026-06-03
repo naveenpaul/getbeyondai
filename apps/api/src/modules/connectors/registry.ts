@@ -2,6 +2,7 @@ import type { ConnectorKind, SourceAdapter } from '@getbeyond/shared';
 import { csvSourceAdapter } from './adapters/csv.source';
 import { hubspotSourceAdapter } from './adapters/hubspot.source';
 import { apolloSourceAdapter } from './adapters/apollo/apollo.source';
+import { snovSourceAdapter } from './adapters/snov/snov.source';
 
 /**
  * Source-adapter registry (eng-review pass-2 adapter architecture section).
@@ -21,6 +22,7 @@ const SOURCE_ADAPTERS: Partial<Record<ConnectorKind, SourceAdapter<unknown>>> =
     csv: csvSourceAdapter as SourceAdapter<unknown>,
     hubspot: hubspotSourceAdapter as SourceAdapter<unknown>,
     apollo: apolloSourceAdapter as SourceAdapter<unknown>,
+    snov: snovSourceAdapter as SourceAdapter<unknown>,
     // salesforce, zoominfo land in T8.
   };
 

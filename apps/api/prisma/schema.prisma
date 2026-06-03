@@ -536,6 +536,7 @@ enum ConnectorKind {
   salesforce
   apollo
   zoominfo
+  snov
   csv
 }
 

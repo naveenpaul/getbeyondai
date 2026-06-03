@@ -332,6 +332,35 @@ export async function connectApollo(
   return res.json() as Promise<{ id: string; status: 'connected' }>;
 }
 
+export interface SnovAccountStatus {
+  connected: boolean;
+  status?: string;
+}
+
+/** Current Snov connection state for the org. */
+export async function getSnovStatus(): Promise<SnovAccountStatus> {
+  const res = await fetch(`${env.apiUrl}/connectors/snov/account`, {
+    credentials: 'include',
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<SnovAccountStatus>;
+}
+
+/** Validate + persist Snov BYO credentials. Throws ApiError(400) on bad creds. */
+export async function connectSnov(
+  clientId: string,
+  clientSecret: string,
+): Promise<{ id: string; status: 'connected' }> {
+  const res = await fetch(`${env.apiUrl}/connectors/snov/account`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ clientId, clientSecret }),
+    credentials: 'include',
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<{ id: string; status: 'connected' }>;
+}
+
 export async function getCsvSyncRun(
   syncRunId: string,
 ): Promise<CsvSyncRunStatusResponse> {

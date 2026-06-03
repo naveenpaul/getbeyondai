@@ -26,6 +26,7 @@ export type ConnectorKind =
   | 'salesforce'
   | 'apollo'
   | 'zoominfo'
+  | 'snov'
   | 'csv';
 
 export type AuthMode = 'oauth' | 'byo_key' | 'upload';

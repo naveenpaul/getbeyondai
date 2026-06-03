@@ -15,8 +15,11 @@ import { Input } from '@/components/ui/input';
 import {
   ApiError,
   connectApollo,
+  connectSnov,
   getApolloStatus,
+  getSnovStatus,
   type ApolloAccountStatus,
+  type SnovAccountStatus,
 } from '@/lib/api-client';
 
 /**
@@ -28,12 +31,18 @@ import {
  */
 export default function ConnectorsSettingsPage(): React.JSX.Element {
   const [status, setStatus] = useState<ApolloAccountStatus | null>(null);
+  const [snovStatus, setSnovStatus] = useState<SnovAccountStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      setStatus(await getApolloStatus());
+      const [apollo, snov] = await Promise.all([
+        getApolloStatus(),
+        getSnovStatus(),
+      ]);
+      setStatus(apollo);
+      setSnovStatus(snov);
     } catch (err) {
       setLoadError(formatError(err));
     }
@@ -56,7 +65,7 @@ export default function ConnectorsSettingsPage(): React.JSX.Element {
     );
   }
 
-  if (status === null) {
+  if (status === null || snovStatus === null) {
     return (
       <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -79,6 +88,7 @@ export default function ConnectorsSettingsPage(): React.JSX.Element {
         </div>
 
         <ApolloConnectorCard status={status} onConnected={() => void load()} />
+        <SnovConnectorCard status={snovStatus} onConnected={() => void load()} />
       </section>
     </div>
   );
@@ -188,6 +198,129 @@ function ApolloStatusBadge({
     return <Badge variant="outline">Not connected</Badge>;
   }
   // Connected but the account isn't active (expired key / tripped circuit).
+  if (status.status && status.status !== 'active') {
+    return (
+      <Badge variant="warning">
+        <TriangleAlert className="mr-1 h-3 w-3" />
+        Needs attention
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="success">
+      <Check className="mr-1 h-3 w-3" />
+      Connected
+    </Badge>
+  );
+}
+
+function SnovConnectorCard({
+  status,
+  onConnected,
+}: {
+  status: SnovAccountStatus;
+  onConnected: () => void;
+}): React.JSX.Element {
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const canSubmit = clientId.trim().length > 0 && clientSecret.trim().length > 0;
+
+  async function onSubmit(e: React.FormEvent): Promise<void> {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await connectSnov(clientId.trim(), clientSecret.trim());
+      setClientId('');
+      setClientSecret('');
+      onConnected();
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.body.replace(/^.*?:\s*/, '') || `Request failed (${err.status})`
+          : formatError(err),
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Plug className="h-4 w-4 text-muted-foreground" />
+            Snov.io
+          </CardTitle>
+          <SnovStatusBadge status={status} />
+        </div>
+        <CardDescription>
+          {status.connected
+            ? 'Credentials are configured. Snov finds contacts + verified emails for the company domains you import. Paste new credentials to replace them.'
+            : 'Add your Snov API credentials to find contacts and verified emails for a list of company domains. Find them in Snov under Settings → API.'}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form className="flex flex-wrap items-end gap-3" onSubmit={onSubmit}>
+          <div className="min-w-[14rem] flex-1 space-y-1">
+            <label htmlFor="snov-client-id" className="text-xs font-medium">
+              API User ID
+            </label>
+            <Input
+              id="snov-client-id"
+              type="text"
+              autoComplete="off"
+              placeholder={status.connected ? '••••••••••••' : 'Paste user ID…'}
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              disabled={submitting}
+            />
+          </div>
+          <div className="min-w-[14rem] flex-1 space-y-1">
+            <label htmlFor="snov-client-secret" className="text-xs font-medium">
+              API Secret
+            </label>
+            <Input
+              id="snov-client-secret"
+              type="password"
+              autoComplete="off"
+              placeholder={status.connected ? '••••••••••••' : 'Paste secret…'}
+              value={clientSecret}
+              onChange={(e) => setClientSecret(e.target.value)}
+              disabled={submitting}
+            />
+          </div>
+          <Button type="submit" disabled={submitting || !canSubmit}>
+            {submitting ? (
+              <>
+                <Loader2 className="animate-spin" /> Validating…
+              </>
+            ) : status.connected ? (
+              <>Replace credentials</>
+            ) : (
+              <>Connect</>
+            )}
+          </Button>
+        </form>
+        {error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function SnovStatusBadge({
+  status,
+}: {
+  status: SnovAccountStatus;
+}): React.JSX.Element {
+  if (!status.connected) {
+    return <Badge variant="outline">Not connected</Badge>;
+  }
   if (status.status && status.status !== 'active') {
     return (
       <Badge variant="warning">

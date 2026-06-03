@@ -115,9 +115,16 @@ describe('DestinationAdapter contract', () => {
 });
 
 describe('ConnectorKind / DraftActionKind enums', () => {
-  it('every ConnectorKind value is one of the five canonical sources', () => {
-    const valid: ConnectorKind[] = ['hubspot', 'salesforce', 'apollo', 'zoominfo', 'csv'];
-    expect(valid).toHaveLength(5);
+  it('every ConnectorKind value is one of the canonical sources', () => {
+    const valid: ConnectorKind[] = [
+      'hubspot',
+      'salesforce',
+      'apollo',
+      'zoominfo',
+      'snov',
+      'csv',
+    ];
+    expect(valid).toHaveLength(6);
   });
 
   it('every DraftActionKind value covers the v1 action menu', () => {
