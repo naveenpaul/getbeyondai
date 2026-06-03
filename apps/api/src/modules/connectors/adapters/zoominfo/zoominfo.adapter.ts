@@ -73,15 +73,14 @@ export interface ZoomInfoSourceAdapterDeps {
   enrichBatchSize?: number;
 }
 
-/** Output fields we ask ZoomInfo to enrich (the columns we map to a contact). */
-const ENRICH_FIELDS = [
-  'firstName',
-  'lastName',
-  'jobTitle',
-  'email',
-  'linkedInUrl',
-  'companyName',
-];
+/**
+ * Output fields we ask ZoomInfo to enrich (the columns we map to a contact).
+ * Verified against the live API (2026-06): `linkedInUrl` is NOT an allowed
+ * field on the GTM plan (400 "Invalid field 'linkedinurl'"), so it's omitted —
+ * ZoomInfo-sourced contacts have no LinkedIn URL. Requesting `companyName`
+ * returns a nested `company:{id,name}` object (see toNormalizedContact).
+ */
+const ENRICH_FIELDS = ['firstName', 'lastName', 'jobTitle', 'email', 'companyName'];
 
 export class ZoomInfoSourceAdapter
   implements SourceAdapter<ZoomInfoSourceConfig>
@@ -231,18 +230,19 @@ function toNormalizedContact(match: unknown): NormalizedContact | null {
   const emailRaw = nullIfBlank(attrs['email'] as string | undefined);
   if (!emailRaw) return null;
 
-  const linkedin = nullIfBlank(attrs['linkedInUrl'] as string | undefined);
+  // ZoomInfo's GTM plan exposes no LinkedIn URL; identity falls back to the
+  // personId (stable) then email. Company name arrives nested under `company`.
   const externalId = personIdOf(obj);
+  const company = attrs['company'] as { name?: unknown } | undefined;
 
   return {
     emailRaw,
-    externalId: externalId !== null ? String(externalId) : (linkedin ?? emailRaw),
-    externalUrl: linkedin ?? undefined,
+    externalId: externalId !== null ? String(externalId) : emailRaw,
     firstName: nullIfBlank(attrs['firstName'] as string | undefined),
     lastName: nullIfBlank(attrs['lastName'] as string | undefined),
     title: nullIfBlank(attrs['jobTitle'] as string | undefined),
-    company: nullIfBlank(attrs['companyName'] as string | undefined),
-    linkedinUrl: linkedin,
+    company: nullIfBlank(company?.name as string | undefined),
+    linkedinUrl: null,
     emailVerification: mapMatchStatus(meta['matchStatus'] as string | undefined),
     rawPayload: match,
   };

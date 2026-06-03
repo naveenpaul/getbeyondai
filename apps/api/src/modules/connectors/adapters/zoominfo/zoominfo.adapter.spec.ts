@@ -49,7 +49,8 @@ function match(
 ): unknown {
   return {
     id,
-    attributes: { email, firstName: 'Dana', lastName: 'Reed', jobTitle: 'VP', companyName: 'Acme', ...extra },
+    // Mirrors the live shape: company is nested, no linkedInUrl on the GTM plan.
+    attributes: { email, firstName: 'Dana', lastName: 'Reed', jobTitle: 'VP', company: { id: 9, name: 'Acme' }, ...extra },
     meta: { matchStatus },
   };
 }
@@ -123,6 +124,8 @@ describe('ZoomInfoSourceAdapter — syncContacts', () => {
     expect(contacts[0]!.emailVerification).toBe('verified'); // FULL_MATCH
     expect(contacts[1]!.emailVerification).toBe('unverified'); // NO_MATCH
     expect(contacts[0]!.title).toBe('VP');
+    expect(contacts[0]!.company).toBe('Acme'); // nested attributes.company.name
+    expect(contacts[0]!.linkedinUrl).toBeNull(); // not on the GTM plan
     expect(contacts[0]!.externalId).toBe('1');
   });
 

@@ -55,7 +55,8 @@ async function main(): Promise<void> {
   console.log(`\n=== STEP 2: enrich ${ids.length} personIds (burns credits) ===`);
   const enriched = await client.enrichContacts(
     ids.map((personId) => ({ personId })),
-    ['firstName', 'lastName', 'jobTitle', 'email', 'linkedInUrl', 'companyName'],
+    // linkedInUrl is not allowed on the GTM plan (verified live); company is nested.
+    ['firstName', 'lastName', 'jobTitle', 'email', 'companyName'],
   );
   const matches = Array.isArray(enriched.data)
     ? (enriched.data as Record<string, unknown>[])
