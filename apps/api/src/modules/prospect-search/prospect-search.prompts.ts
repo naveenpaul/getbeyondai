@@ -135,10 +135,15 @@ Scoring rules:
   prospect that satisfies only SOME requirements scores LOW, not high. Example:
   goal = "small, funded, UK" and the brief shows a large UK enterprise → poor
   match; score it low even though it is in the UK.
-- Ground every judgment in the brief — it is your only evidence. Do NOT assume a
-  requirement is met just because it isn't contradicted. A requirement the brief
-  does not positively support is NOT satisfied: treat it as a miss (or, if truly
-  unknowable, a partial penalty), and say so.
+- Ground every judgment in the EVIDENCE — the cited brief PLUS any firmographics
+  the prospect source already confirmed (shown under "Known firmographics"). Those
+  source firmographics are ESTABLISHED facts: credit the requirements they satisfy
+  directly; do NOT require the brief to re-prove them (e.g. if the source confirms
+  8 employees, "fewer than 10 employees" is met). Beyond that evidence, do NOT
+  assume a requirement is met just because it isn't contradicted — a requirement
+  neither the brief nor the firmographics support is NOT satisfied: treat it as a
+  miss (or, if genuinely unknowable from public sources, a partial penalty rather
+  than a hard zero), and say so.
 - Weight hard requirements heavily. Missing even one hard requirement caps the
   score low (≈ 0.4 or below), regardless of what else matches.
 - Be calibrated: 1.0 = clearly satisfies every requirement with brief support;
@@ -152,11 +157,23 @@ Respond with STRICT JSON ONLY — no prose, no markdown fences. Shape:
   "rationale": "<one or two sentences naming which requirements it meets and which it misses or can't confirm>"
 }`;
 
+/**
+ * Firmographics the prospect SOURCE already confirmed (and usually filtered on),
+ * passed to the scorer as established evidence so it doesn't penalize a candidate
+ * for facts the brief can't re-prove (the failure mode where tiny companies with
+ * thin web footprints all scored near-zero).
+ */
+export interface SourceFirmographics {
+  employeeCount: number | null;
+  fundingStage: string | null;
+}
+
 export function buildCandidateScoringUserPrompt(
   goal: string,
   icp: IcpCriteria,
   candidateName: string,
   brief: string,
+  firmographics?: SourceFirmographics,
 ): string {
   return `Goal (the user's full intent — score against ALL of it):
 ${goal}
@@ -165,9 +182,28 @@ Structured ICP (derived from the goal):
 ${JSON.stringify(icp, null, 2)}
 
 Candidate: ${candidateName}
-
-Researched brief (cited facts — your only evidence):
+${buildFirmographicsBlock(firmographics)}
+Researched brief (cited facts):
 ${brief}
 
 Score the prospect's fit to the GOAL as STRICT JSON per the system instructions.`;
+}
+
+/**
+ * Render the source-confirmed firmographics as an evidence block the scorer
+ * treats as established. Only non-empty fields are listed; nothing known → ''.
+ */
+function buildFirmographicsBlock(f?: SourceFirmographics): string {
+  if (!f) return '';
+  const lines: string[] = [];
+  if (f.employeeCount != null) {
+    lines.push(`- Employee count: ${f.employeeCount}`);
+  }
+  if (f.fundingStage) lines.push(`- Funding stage: ${f.fundingStage}`);
+  if (lines.length === 0) return '';
+  return `
+Known firmographics (confirmed by the prospect source — treat as established;
+the brief need not re-prove them):
+${lines.join('\n')}
+`;
 }

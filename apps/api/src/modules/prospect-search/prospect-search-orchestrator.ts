@@ -45,6 +45,7 @@ import {
   buildIcpDerivationUserPrompt,
   CANDIDATE_SCORING_SYSTEM_PROMPT,
   ICP_DERIVATION_SYSTEM_PROMPT,
+  type SourceFirmographics,
   type WinExample,
 } from './prospect-search.prompts';
 
@@ -811,6 +812,12 @@ export class ProspectSearchOrchestrator {
       icp: params.icp,
       candidateName: prospect.name,
       brief: briefText,
+      // The firmographics the source already confirmed (and filtered on) — so
+      // the scorer credits e.g. "employees < 10" without the brief re-proving it.
+      firmographics: {
+        employeeCount: prospect.employeeCount,
+        fundingStage: prospect.fundingStage,
+      },
       budgetCents: params.budgetCents,
     });
 
@@ -836,6 +843,7 @@ export class ProspectSearchOrchestrator {
     icp: IcpCriteria;
     candidateName: string;
     brief: string;
+    firmographics: SourceFirmographics;
     budgetCents: number;
   }): Promise<{ fitScore: number; rationale: string }> {
     // Re-open the run for the scoring call (callModel reads costCents off it +
@@ -860,6 +868,7 @@ export class ProspectSearchOrchestrator {
                   params.icp,
                   params.candidateName,
                   params.brief,
+                  params.firmographics,
                 ),
               },
             ],

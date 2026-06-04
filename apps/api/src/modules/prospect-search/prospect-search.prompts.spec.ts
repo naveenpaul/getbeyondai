@@ -28,6 +28,32 @@ describe('buildCandidateScoringUserPrompt', () => {
     expect(prompt).toContain('BRIEF_TEXT_HERE');
     expect(prompt).toContain('United Kingdom'); // the serialized ICP
   });
+
+  it('surfaces source-confirmed firmographics as established evidence', () => {
+    const prompt = buildCandidateScoringUserPrompt(
+      'small funded UK companies',
+      ICP,
+      'Acme',
+      'brief',
+      { employeeCount: 8, fundingStage: 'seed' },
+    );
+    expect(prompt).toMatch(/Known firmographics/i);
+    expect(prompt).toContain('Employee count: 8');
+    expect(prompt).toContain('Funding stage: seed');
+  });
+
+  it('omits the firmographics block when nothing is known', () => {
+    expect(
+      buildCandidateScoringUserPrompt('g', ICP, 'Acme', 'brief', {
+        employeeCount: null,
+        fundingStage: null,
+      }),
+    ).not.toMatch(/Known firmographics/i);
+    // ...and when no firmographics arg is passed at all.
+    expect(
+      buildCandidateScoringUserPrompt('g', ICP, 'Acme', 'brief'),
+    ).not.toMatch(/Known firmographics/i);
+  });
 });
 
 describe('CANDIDATE_SCORING_SYSTEM_PROMPT', () => {
@@ -35,7 +61,13 @@ describe('CANDIDATE_SCORING_SYSTEM_PROMPT', () => {
     // Guards the fix for "everything scored 1.0 on location alone".
     expect(CANDIDATE_SCORING_SYSTEM_PROMPT).toMatch(/only SOME/i);
     expect(CANDIDATE_SCORING_SYSTEM_PROMPT).toMatch(/score.*low/i);
-    expect(CANDIDATE_SCORING_SYSTEM_PROMPT).toMatch(/not assume/i);
+    // whitespace-tolerant: the prompt wraps "do NOT\n assume" across a line.
+    expect(CANDIDATE_SCORING_SYSTEM_PROMPT).toMatch(/not\s+assume/i);
+  });
+
+  it('treats source firmographics as established (so thin briefs do not zero out good matches)', () => {
+    expect(CANDIDATE_SCORING_SYSTEM_PROMPT).toMatch(/established/i);
+    expect(CANDIDATE_SCORING_SYSTEM_PROMPT).toMatch(/firmographics/i);
   });
 });
 
