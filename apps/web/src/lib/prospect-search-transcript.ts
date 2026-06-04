@@ -126,7 +126,10 @@ export function buildProspectSearchTranscript(
         const { prospect, index, total } = e.data;
         prospects.push(prospect);
         rows.push({
-          key: `prospect|${index}|${prospect.domain ?? prospect.name}`,
+          // `index` is only unique within a single underlying run, so two
+          // prospectSearch batches/re-runs can both emit index 0 and collide.
+          // `at` disambiguates, mirroring the phase/terminal rows above.
+          key: `prospect|${e.at}|${index}|${prospect.domain ?? prospect.name}`,
           kind: 'prospect',
           prospect,
           index,
