@@ -38,7 +38,41 @@ fail() { printf "%s✗%s %s\n" "$C_RED" "$C_RESET" "$1" >&2; exit 1; }
 dim()  { printf "%s%s%s\n" "$C_DIM" "$1" "$C_RESET"; }
 
 # ─── 1. Docker + containers ───────────────────────────────────────────────
-docker info >/dev/null 2>&1 || fail "Docker isn't running. Start Docker Desktop and re-run."
+# Try to start the Docker daemon automatically and wait for it, rather than
+# making the user start it and re-run by hand. Prefer Colima (its `start` blocks
+# until the VM's daemon is ready); fall back to Docker Desktop / systemd.
+start_docker() {
+  if command -v colima >/dev/null 2>&1; then
+    colima start 2>/dev/null && return 0
+  fi
+  case "$(uname -s)" in
+    Darwin)
+      open -a Docker 2>/dev/null || open -a "Docker Desktop" 2>/dev/null || return 1
+      ;;
+    Linux)
+      # Headless / CI: try the service, but don't hard-fail if we lack perms.
+      sudo systemctl start docker 2>/dev/null || return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+if ! docker info >/dev/null 2>&1; then
+  warn "Docker isn't running — attempting to start it…"
+  start_docker || fail "Couldn't launch Docker automatically. Start Docker Desktop and re-run."
+
+  # Poll up to 90s for the daemon to accept connections.
+  for _ in $(seq 1 45); do
+    if docker info >/dev/null 2>&1; then break; fi
+    sleep 2
+  done
+
+  docker info >/dev/null 2>&1 \
+    || fail "Docker didn't come up in time. Give Docker Desktop a moment, then re-run."
+  ok "Docker is running"
+fi
 
 PG_CONTAINER="$(docker ps --filter "ancestor=postgres:16-alpine" --format '{{.Names}}' | head -n1)"
 if [ -z "$PG_CONTAINER" ]; then
