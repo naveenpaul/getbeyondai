@@ -12,6 +12,7 @@ import { ContactsModule } from './modules/contacts/contacts.module';
 import { DraftsModule } from './modules/drafts/drafts.module';
 import { InvitesModule } from './modules/invites/invites.module';
 import { LlmSettingsModule } from './modules/llm-settings/llm-settings.module';
+import { SourcingSettingsModule } from './modules/sourcing-settings/sourcing-settings.module';
 import { ReapersModule } from './modules/reapers/reapers.module';
 import { TeammatesModule } from './modules/teammates/teammates.module';
 
@@ -31,6 +32,7 @@ import { TeammatesModule } from './modules/teammates/teammates.module';
     DraftsModule,
     InvitesModule,
     LlmSettingsModule,
+    SourcingSettingsModule,
     ReapersModule,
     TeammatesModule,
     ProspectSearchModule,

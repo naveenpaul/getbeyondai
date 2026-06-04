@@ -43,6 +43,12 @@
       "require": "./dist/llm-settings-contracts.js",
       "import": "./dist/llm-settings-contracts.js",
       "default": "./dist/llm-settings-contracts.js"
+    },
+    "./sourcing-settings-contracts": {
+      "types": "./dist/sourcing-settings-contracts.d.ts",
+      "require": "./dist/sourcing-settings-contracts.js",
+      "import": "./dist/sourcing-settings-contracts.js",
+      "default": "./dist/sourcing-settings-contracts.js"
     }
   },
   "scripts": {

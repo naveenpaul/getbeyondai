@@ -27,6 +27,25 @@ export type SourcingConfig =
   | { provider: 'contact_list'; listId: string }
   | { provider: 'apollo' };
 
+// ─── Explicit ICP criteria (user-supplied overrides) ────────────────
+//
+// A search always derives an ICP from the goal (+ optional wins list) via the
+// LLM. These OPTIONAL fields let the user pin hard firmographic constraints
+// directly — each provided field overrides the corresponding derived field
+// (field-by-field), and all of them are fed into the derivation prompt so the
+// human-readable summary reflects them. A field left `undefined` is "let the
+// model decide"; an explicit value (including `[]` or `null`) is authoritative.
+// Mirrors the internal `IcpCriteria` shape, with every field optional.
+
+export interface IcpCriteriaInput {
+  keywords?: string[];
+  employeeCountMin?: number | null;
+  employeeCountMax?: number | null;
+  fundingStages?: string[];
+  industries?: string[];
+  locations?: string[];
+}
+
 // ─── POST /prospect-searches ────────────────────────────────────────
 //
 // Identity (orgId, createdBy) is derived from the session, never the body.
@@ -44,6 +63,11 @@ export interface CreateProspectSearchRequest {
    * Attach a list (pick existing / CSV import / HubSpot) to find prospects.
    */
   sourcing?: SourcingConfig | null;
+  /**
+   * Explicit ICP overrides. Optional: when omitted the ICP is derived purely
+   * from the goal + wins. Any provided field overrides the derived value.
+   */
+  icpCriteria?: IcpCriteriaInput | null;
   /** Per-search hard cost cap (cents). */
   budgetCents?: number;
 }

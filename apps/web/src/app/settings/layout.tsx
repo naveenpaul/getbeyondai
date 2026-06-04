@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Brain, Plug, Users } from 'lucide-react';
+import { Brain, Network, Plug, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /**
@@ -25,6 +25,7 @@ const SETTINGS_TABS: readonly SettingsTab[] = [
   { href: '/settings/team', label: 'Team', icon: Users },
   { href: '/settings/ai', label: 'AI', icon: Brain },
   { href: '/settings/connectors', label: 'Connectors', icon: Plug },
+  { href: '/settings/sourcing', label: 'Sourcing', icon: Network },
 ];
 
 function isActive(pathname: string, href: string): boolean {

@@ -1,3 +1,4 @@
+import type { IcpCriteriaInput } from '@getbeyond/shared';
 import type { IcpCriteria } from '../connectors/sourcing/sourcing-provider';
 
 /**
@@ -46,6 +47,7 @@ Respond with STRICT JSON ONLY — no prose, no markdown fences. Shape:
 export function buildIcpDerivationUserPrompt(
   goal: string,
   wins: WinExample[],
+  criteria?: IcpCriteriaInput | null,
 ): string {
   const winLines =
     wins.length === 0
@@ -61,8 +63,46 @@ ${goal}
 
 Closed-won accounts (the wins to find lookalikes of):
 ${winLines}
-
+${buildConstraintsBlock(criteria)}
 Derive the ICP as STRICT JSON per the system instructions.`;
+}
+
+/**
+ * Render the user's explicit ICP constraints as a prompt block. These are HARD
+ * requirements the model must honor in its summary + must not contradict. The
+ * orchestrator ALSO overrides the structured fields deterministically after the
+ * model responds (so the actual filter values are exactly what the user asked);
+ * surfacing them here keeps the human-readable `summary` consistent with those
+ * overrides. Only non-empty fields are listed; an all-empty input yields ''.
+ */
+function buildConstraintsBlock(criteria?: IcpCriteriaInput | null): string {
+  if (!criteria) return '';
+  const lines: string[] = [];
+  if (criteria.industries?.length) {
+    lines.push(`- Industries: ${criteria.industries.join(', ')}`);
+  }
+  if (criteria.keywords?.length) {
+    lines.push(`- Keywords: ${criteria.keywords.join(', ')}`);
+  }
+  if (criteria.fundingStages?.length) {
+    lines.push(`- Funding stages: ${criteria.fundingStages.join(', ')}`);
+  }
+  if (criteria.locations?.length) {
+    lines.push(`- Locations: ${criteria.locations.join(', ')}`);
+  }
+  const min = criteria.employeeCountMin;
+  const max = criteria.employeeCountMax;
+  if (min != null || max != null) {
+    const lo = min != null ? `${min}` : 'any';
+    const hi = max != null ? `${max}` : 'any';
+    lines.push(`- Employee count: ${lo}–${hi}`);
+  }
+  if (lines.length === 0) return '';
+  return `
+The user has specified these HARD ICP constraints — honor them in your summary
+and do not contradict them:
+${lines.join('\n')}
+`;
 }
 
 export const CANDIDATE_SCORING_SYSTEM_PROMPT = `You are getbeyond ai's prospectSearch fit scorer.

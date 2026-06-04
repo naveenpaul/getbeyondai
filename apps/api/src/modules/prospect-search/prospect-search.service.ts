@@ -10,11 +10,13 @@ import type {
   ProspectSearchSummary,
   CreateProspectSearchRequest,
   CreateProspectSearchResponse,
+  IcpCriteriaInput,
   IcpSummary,
   QualifiedProspect,
   ResearcherDraftClaim,
   SourcingConfig,
 } from '@getbeyond/shared';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
 import {
@@ -56,6 +58,7 @@ export class ProspectSearchService {
   ): Promise<CreateProspectSearchResponse> {
     const winsListId = req.winsListId ?? null;
     const sourcing = req.sourcing ?? null;
+    const icpCriteria = req.icpCriteria ?? null;
     const prospectSearch = await this.prisma.prospectSearch.create({
       data: {
         orgId,
@@ -68,6 +71,12 @@ export class ProspectSearchService {
         // detail can report what it used. Omit (→ SQL NULL) when absent rather
         // than threading Prisma.JsonNull through.
         ...(sourcing !== null ? { sourcing } : {}),
+        // IcpCriteriaInput is an interface (no implicit index signature), so it
+        // isn't assignable to Prisma's recursive InputJsonValue without a cast.
+        // The value is plain JSON; the cast is sound.
+        ...(icpCriteria !== null
+          ? { icpCriteria: icpCriteria as unknown as Prisma.InputJsonValue }
+          : {}),
         ...(req.budgetCents !== undefined ? { budgetCents: req.budgetCents } : {}),
       },
     });
@@ -79,6 +88,7 @@ export class ProspectSearchService {
       goal: req.goal,
       winsListId,
       sourcing,
+      icpCriteria,
       budgetCents: req.budgetCents,
     });
 
@@ -113,6 +123,8 @@ export class ProspectSearchService {
       title: source.title,
       winsListId: source.winsListId,
       sourcing: (source.sourcing as unknown as SourcingConfig | null) ?? null,
+      icpCriteria:
+        (source.icpCriteria as unknown as IcpCriteriaInput | null) ?? null,
       ...(source.budgetCents !== null
         ? { budgetCents: source.budgetCents }
         : {}),

@@ -12,6 +12,8 @@ import type {
   SaveLlmCredentialResponse,
   SaveLlmRoutingRequest,
   TestLlmCredentialResponse,
+  SaveSourcingSettingsRequest,
+  SourcingSettingsResponse,
   SdrDrafterRunEnqueueResponse,
   SdrDrafterRunRequest,
   SdrDrafterRunStatusResponse,
@@ -654,4 +656,31 @@ export async function saveLlmRouting(
   });
   if (!res.ok) await readError(res);
   return res.json() as Promise<TeammateRoutingConfig>;
+}
+
+// ─── Sourcing settings (Stage 5 contact waterfall) ──────────────────────────
+//
+// Per-org connector priority + verification threshold for the contact-sourcing
+// waterfall. GET reports the org's effective config (defaults when unset);
+// PUT upserts it.
+
+export async function getSourcingSettings(): Promise<SourcingSettingsResponse> {
+  const res = await fetch(`${env.apiUrl}/settings/sourcing`, {
+    credentials: 'include',
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<SourcingSettingsResponse>;
+}
+
+export async function saveSourcingSettings(
+  req: SaveSourcingSettingsRequest,
+): Promise<SourcingSettingsResponse> {
+  const res = await fetch(`${env.apiUrl}/settings/sourcing`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<SourcingSettingsResponse>;
 }

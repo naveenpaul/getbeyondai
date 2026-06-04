@@ -58,6 +58,7 @@ model Organization {
   syncRuns          SyncRun[]
   llmCredentials    OrgLlmCredential[]
   teammateConfigs   OrgTeammateConfig[]
+  sourcingConfig    OrgSourcingConfig?
   prospectSearches  ProspectSearch[]
 
   @@map("organizations")
@@ -465,6 +466,32 @@ model OrgTeammateConfig {
   @@map("org_teammate_configs")
 }
 
+// Email-verification bar applied while sourcing contacts in the Stage 5
+// waterfall. `verified` chases a verified email across connectors; `any`
+// accepts the first contact found. Mirrors the WaterfallOptions threshold.
+enum SourcingThreshold {
+  verified
+  any
+}
+
+// Org-scoped tuning for the Stage 5 contact-sourcing waterfall: which enrichment
+// connectors to try and in what order, plus the verification threshold. Absence
+// of a row = the built-in defaults ([zoominfo, snov], verified), so a fresh org
+// behaves exactly as before. One row per org. `contactPriority` is an ordered
+// list of ConnectorKind values, validated at the write boundary to only the
+// enrichment connectors (zoominfo | snov).
+model OrgSourcingConfig {
+  id               String            @id @default(cuid())
+  orgId            String            @unique
+  contactPriority  ConnectorKind[]   @default([])
+  contactThreshold SourcingThreshold @default(verified)
+  updatedAt        DateTime          @updatedAt
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@map("org_sourcing_configs")
+}
+
 // ============================================================================
 // ProspectSearches — the maintained "activity" behind the chat workspace. A
 // prospect search is a lookalike-sourcing run: derive an ICP from a wins list,
@@ -494,8 +521,10 @@ model ProspectSearch {
   // the pg-boss job payload — business state outside the DB, which broke re-run.
   //   sourcing    — the SourcingConfig (prospect pool). null = no source.
   //   budgetCents — per-search cost cap. null = orchestrator default.
+  //   icpCriteria — explicit ICP overrides (IcpCriteriaInput). null = derive-only.
   sourcing    Json? // SourcingConfig | null
   budgetCents Int?
+  icpCriteria Json? // IcpCriteriaInput | null
   createdBy   String // userId
   createdAt   DateTime             @default(now())
   updatedAt   DateTime             @updatedAt

@@ -1,5 +1,9 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import type { ProspectSearchEvent, SourcingConfig } from '@getbeyond/shared';
+import type {
+  ProspectSearchEvent,
+  IcpCriteriaInput,
+  SourcingConfig,
+} from '@getbeyond/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
 import { LlmResolver } from '../teammates/runtime/llm-resolver';
@@ -17,6 +21,7 @@ import {
   type SourcingProvider,
 } from '../connectors/sourcing/sourcing-provider';
 import type { WaterfallConnector } from '../connectors/sourcing/waterfall-sourcing.service';
+import { resolveOrgSourcingConfig } from '../connectors/sourcing/org-sourcing-config';
 import { apolloSourceAdapter } from '../connectors/adapters/apollo/apollo.source';
 import { snovSourceAdapter } from '../connectors/adapters/snov/snov.source';
 import { zoominfoSourceAdapter } from '../connectors/adapters/zoominfo/zoominfo.adapter';
@@ -64,6 +69,7 @@ export interface ProspectSearchRunJobPayload {
   goal: string;
   winsListId: string | null;
   sourcing: SourcingConfig | null;
+  icpCriteria: IcpCriteriaInput | null;
   budgetCents?: number;
 }
 
@@ -105,6 +111,12 @@ export class ProspectSearchWorker implements OnModuleInit {
             data.orgId,
             PROSPECT_SEARCH_TEAMMATE,
           );
+          // Per-org Stage 5 tuning (connector priority + verification threshold);
+          // defaults when the org never configured it.
+          const sourcingConfig = await resolveOrgSourcingConfig(
+            this.prisma,
+            data.orgId,
+          );
           const orchestrator = new ProspectSearchOrchestrator({
             prisma: this.prisma,
             llm: provider,
@@ -116,7 +128,12 @@ export class ProspectSearchWorker implements OnModuleInit {
                 data.sourcing,
               ),
             buildContactSourcers: (orgId) =>
-              buildContactSourcers(this.prisma, this.credentials, orgId),
+              buildContactSourcers(
+                this.prisma,
+                this.credentials,
+                orgId,
+                sourcingConfig.priority,
+              ),
             // ProspectSearchEvents ride the same bus the teammate runtime uses.
             // toBusEvent stamps runId=prospectSearchId so the bus (which routes by
             // runId) delivers them to the stream subscribed by prospectSearchId.
@@ -129,6 +146,8 @@ export class ProspectSearchWorker implements OnModuleInit {
             triggeredBy: data.triggeredBy,
             goal: data.goal,
             winsListId: data.winsListId,
+            icpCriteria: data.icpCriteria,
+            contactThreshold: sourcingConfig.threshold,
             modelName: modelPrimary,
             budgetCents: data.budgetCents,
           });
@@ -236,30 +255,25 @@ function apolloUnavailableMessage(code: CredentialManagerErrorCode): string {
 }
 
 /**
- * Priority order for Stage 5 contact enrichment (eng-review A3 default):
- * ZoomInfo first (better verification for the verified-chase), then Snov. Only
- * connectors with a committed adapter are listed; ZoomInfo joins when its
- * adapter lands.
- */
-const CONTACT_SOURCER_PRIORITY: readonly ConnectorKind[] = ['zoominfo', 'snov'];
-
-/**
  * Build the org's ordered enrichment connectors for Stage 5 (contact sourcing).
  *
  * Mirrors `buildSourcingProvider`, but for the contacts-with-emails waterfall:
- * for each connected enrichment connector (in priority order) it loads + decrypts
- * the BYO key (invariant #6) and wraps the adapter as a `WaterfallConnector`
- * bound to those creds + the credential-manager's breaker hooks. A connector
- * that isn't connected, or whose key is rejected / circuit-broken, simply sits
- * out the waterfall — Stage 5 is best-effort and never fails the prospectSearch.
+ * for each connected enrichment connector (in the caller-supplied `priority`
+ * order — per-org configurable, defaults to [zoominfo, snov]) it loads +
+ * decrypts the BYO key (invariant #6) and wraps the adapter as a
+ * `WaterfallConnector` bound to those creds + the credential-manager's breaker
+ * hooks. A connector that isn't connected, or whose key is rejected /
+ * circuit-broken, simply sits out the waterfall — Stage 5 is best-effort and
+ * never fails the prospectSearch. Both ZoomInfo and Snov adapters are wired.
  */
 export async function buildContactSourcers(
   prisma: PrismaService,
   credentials: CredentialManager,
   orgId: string,
+  priority: readonly ConnectorKind[],
 ): Promise<WaterfallConnector[]> {
   const connectors: WaterfallConnector[] = [];
-  for (const kind of CONTACT_SOURCER_PRIORITY) {
+  for (const kind of priority) {
     const connector = await buildOneContactSourcer(
       prisma,
       credentials,

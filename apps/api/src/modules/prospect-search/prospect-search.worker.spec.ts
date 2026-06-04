@@ -178,24 +178,53 @@ describe('buildContactSourcers', () => {
   const creds = {
     load: async () => ({ clientId: 'i', clientSecret: 's' }),
   } as unknown as CredentialManager;
+  // The built-in default priority; passed explicitly now that the order is a
+  // per-org parameter rather than a module constant.
+  const DEFAULT_PRIORITY = ['zoominfo', 'snov'] as const;
 
   it('returns no connectors when none are connected', async () => {
     const prisma = prismaWithConnectorKinds(new Set());
-    expect(await buildContactSourcers(prisma, creds, 'org-1')).toEqual([]);
+    expect(
+      await buildContactSourcers(prisma, creds, 'org-1', DEFAULT_PRIORITY),
+    ).toEqual([]);
   });
 
   it('builds a bound Snov WaterfallConnector when only Snov is connected', async () => {
     const prisma = prismaWithConnectorKinds(new Set(['snov']));
-    const connectors = await buildContactSourcers(prisma, creds, 'org-1');
+    const connectors = await buildContactSourcers(
+      prisma,
+      creds,
+      'org-1',
+      DEFAULT_PRIORITY,
+    );
     expect(connectors).toHaveLength(1);
     expect(connectors[0]!.kind).toBe('snov');
     expect(connectors[0]!.accountId).toBe('acct-snov');
   });
 
-  it('orders ZoomInfo before Snov when both are connected', async () => {
+  it('orders ZoomInfo before Snov when both are connected (default priority)', async () => {
     const prisma = prismaWithConnectorKinds(new Set(['snov', 'zoominfo']));
-    const connectors = await buildContactSourcers(prisma, creds, 'org-1');
+    const connectors = await buildContactSourcers(
+      prisma,
+      creds,
+      'org-1',
+      DEFAULT_PRIORITY,
+    );
     expect(connectors.map((c) => c.kind)).toEqual(['zoominfo', 'snov']);
+  });
+
+  it('honors a per-org priority that reorders Snov before ZoomInfo', async () => {
+    const prisma = prismaWithConnectorKinds(new Set(['snov', 'zoominfo']));
+    const connectors = await buildContactSourcers(prisma, creds, 'org-1', [
+      'snov',
+      'zoominfo',
+    ]);
+    expect(connectors.map((c) => c.kind)).toEqual(['snov', 'zoominfo']);
+  });
+
+  it('sources nothing when the priority is empty (configured off)', async () => {
+    const prisma = prismaWithConnectorKinds(new Set(['snov', 'zoominfo']));
+    expect(await buildContactSourcers(prisma, creds, 'org-1', [])).toEqual([]);
   });
 
   it('skips a connector whose credentials are rejected (best-effort, never fails)', async () => {
@@ -203,14 +232,16 @@ describe('buildContactSourcers', () => {
     const credentials = credentialsThatThrow(
       new CredentialManagerError('expired', 'key rejected'),
     );
-    expect(await buildContactSourcers(prisma, credentials, 'org-1')).toEqual([]);
+    expect(
+      await buildContactSourcers(prisma, credentials, 'org-1', DEFAULT_PRIORITY),
+    ).toEqual([]);
   });
 
   it('re-throws a non-credential error so pg-boss can retry', async () => {
     const prisma = prismaWithConnectorKinds(new Set(['snov']));
     const credentials = credentialsThatThrow(new Error('DB unreachable'));
     await expect(
-      buildContactSourcers(prisma, credentials, 'org-1'),
+      buildContactSourcers(prisma, credentials, 'org-1', DEFAULT_PRIORITY),
     ).rejects.toThrow(/DB unreachable/);
   });
 });

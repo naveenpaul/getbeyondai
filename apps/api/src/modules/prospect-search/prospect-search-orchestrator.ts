@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import type {
   ProspectSearchEvent,
   IcpSummary,
+  IcpCriteriaInput,
   QualifiedProspect,
   ResearcherDraftClaim,
   RunEvent,
@@ -143,6 +144,13 @@ export interface OrchestrateProspectSearchInput {
   goal: string;
   /** ContactList of closed-won accounts the ICP is derived from. */
   winsListId: string | null;
+  /**
+   * Explicit ICP overrides. Each provided field overrides what the model derives
+   * from the goal + wins; absent → fully derived (prior behavior).
+   */
+  icpCriteria?: IcpCriteriaInput | null;
+  /** Email-verification bar for Stage 5 contact sourcing. Default 'verified'. */
+  contactThreshold?: 'verified' | 'any';
   /** Overrides; defaults applied when absent. */
   budgetCents?: number;
   candidateLimit?: number;
@@ -210,6 +218,10 @@ export class ProspectSearchOrchestrator {
   // the orchestrator is constructed per-run, run() is called once, and every
   // prospect in a run uses the same model.
   private modelName: string = PROSPECT_SEARCH_DEFAULTS.modelName;
+  // Stage 5 verification threshold for this run (set at run() start). Same
+  // per-run-instance justification as modelName.
+  private contactThreshold: 'verified' | 'any' =
+    CONTACT_SOURCING_DEFAULTS.threshold;
 
   constructor(deps: ProspectSearchOrchestratorDeps) {
     this.deps = deps;
@@ -231,6 +243,8 @@ export class ProspectSearchOrchestrator {
       input.candidateLimit ?? PROSPECT_SEARCH_DEFAULTS.candidateLimit;
     const concurrency = input.concurrency ?? PROSPECT_SEARCH_DEFAULTS.concurrency;
     this.modelName = input.modelName ?? PROSPECT_SEARCH_DEFAULTS.modelName;
+    this.contactThreshold =
+      input.contactThreshold ?? CONTACT_SOURCING_DEFAULTS.threshold;
 
     this.deps.emitEvent(searchStarted(prospectSearchId, input.goal));
 
@@ -242,6 +256,7 @@ export class ProspectSearchOrchestrator {
         input.triggeredBy,
         input.goal,
         input.winsListId,
+        input.icpCriteria,
       );
       this.deps.emitEvent(icpDerived(prospectSearchId, derived.summary));
 
@@ -384,7 +399,7 @@ export class ProspectSearchOrchestrator {
           { name: target.name, domain: target.domain },
           connectors,
           {
-            threshold: CONTACT_SOURCING_DEFAULTS.threshold,
+            threshold: this.contactThreshold,
             contactsPerCompany: CONTACT_SOURCING_DEFAULTS.contactsPerCompany,
           },
         );
@@ -449,6 +464,7 @@ export class ProspectSearchOrchestrator {
     triggeredBy: string,
     goal: string,
     winsListId: string | null,
+    icpCriteria?: IcpCriteriaInput | null,
   ): Promise<DerivedIcp> {
     const wins = winsListId
       ? await this.readWins(orgId, winsListId)
@@ -476,7 +492,7 @@ export class ProspectSearchOrchestrator {
             content: [
               {
                 type: 'text',
-                text: buildIcpDerivationUserPrompt(goal, wins),
+                text: buildIcpDerivationUserPrompt(goal, wins, icpCriteria),
               },
             ],
           },
@@ -495,19 +511,28 @@ export class ProspectSearchOrchestrator {
       throw err;
     }
 
-    const icp: IcpCriteria = {
-      keywords: parsed.keywords,
-      employeeCountMin: parsed.employeeCountMin,
-      employeeCountMax: parsed.employeeCountMax,
-      fundingStages: parsed.fundingStages,
-      industries: parsed.industries,
-      locations: parsed.locations,
-    };
+    // The model derives an ICP from the goal + wins; the user's explicit
+    // criteria then override it field-by-field (deterministic — the actual
+    // filter values are exactly what the user asked, regardless of the model).
+    const icp: IcpCriteria = mergeIcp(
+      {
+        keywords: parsed.keywords,
+        employeeCountMin: parsed.employeeCountMin,
+        employeeCountMax: parsed.employeeCountMax,
+        fundingStages: parsed.fundingStages,
+        industries: parsed.industries,
+        locations: parsed.locations,
+      },
+      icpCriteria,
+    );
+    // Summary's structured chips read from the merged ICP so the display matches
+    // the values actually used; the prose summary stays the model's (it was
+    // already instructed to honor the constraints).
     const summary: IcpSummary = {
       summary: parsed.summary,
-      keywords: parsed.keywords,
-      employeeCountMax: parsed.employeeCountMax,
-      fundingStages: parsed.fundingStages,
+      keywords: icp.keywords,
+      employeeCountMax: icp.employeeCountMax,
+      fundingStages: icp.fundingStages,
     };
 
     // Persist the derived IcpSummary on the (now terminal) AgentRun's
@@ -906,6 +931,36 @@ export function extractText(
     .map((b) => b.text)
     .join('\n')
     .trim();
+}
+
+/**
+ * Merge user-supplied explicit ICP overrides over a model-derived ICP,
+ * field-by-field. A provided field wins; an absent field (`undefined`) keeps the
+ * derived value. The distinction matters for the nullable employee-count bounds:
+ * an explicit `null` CLEARS the bound (authoritative), so we test for
+ * `undefined` rather than nullish — `??` would wrongly treat a deliberate `null`
+ * as "not provided". Arrays are never null in the input, so `??` is safe there.
+ * Pure + total; `override` absent → returns `derived` unchanged.
+ */
+export function mergeIcp(
+  derived: IcpCriteria,
+  override?: IcpCriteriaInput | null,
+): IcpCriteria {
+  if (!override) return derived;
+  return {
+    keywords: override.keywords ?? derived.keywords,
+    employeeCountMin:
+      override.employeeCountMin !== undefined
+        ? override.employeeCountMin
+        : derived.employeeCountMin,
+    employeeCountMax:
+      override.employeeCountMax !== undefined
+        ? override.employeeCountMax
+        : derived.employeeCountMax,
+    fundingStages: override.fundingStages ?? derived.fundingStages,
+    industries: override.industries ?? derived.industries,
+    locations: override.locations ?? derived.locations,
+  };
 }
 
 /**
