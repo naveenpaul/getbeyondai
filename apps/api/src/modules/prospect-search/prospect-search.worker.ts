@@ -17,6 +17,12 @@ import {
   type ApolloOrgSearcher,
 } from '../connectors/sourcing/apollo-sourcing.provider';
 import {
+  ZoomInfoSourcingProvider,
+  type ZoomInfoCompanySearcher,
+} from '../connectors/sourcing/zoominfo-sourcing.provider';
+import { ZoomInfoClient } from '../connectors/adapters/zoominfo/zoominfo.source';
+import type { DecryptedCredentials } from '@getbeyond/shared';
+import {
   SourcingUnavailableError,
   type SourcingProvider,
 } from '../connectors/sourcing/sourcing-provider';
@@ -193,38 +199,94 @@ export async function buildSourcingProvider(
   apolloAdapter: ApolloOrgSearcher = apolloSourceAdapter,
   // Defaults to the env-resolved mode; tests pass it explicitly.
   deploymentMode: DeploymentMode = resolveDeploymentMode(),
+  // Builds a ZoomInfo company searcher from decrypted creds; tests inject a fake.
+  zoomInfoSearcherFactory: (
+    creds: DecryptedCredentials,
+  ) => ZoomInfoCompanySearcher = defaultZoomInfoSearcherFactory,
 ): Promise<SourcingProvider | null> {
   if (sourcing?.provider === 'contact_list') {
     return new ContactListSourcingProvider(prisma, orgId, sourcing.listId);
   }
+  if (sourcing?.provider === 'zoominfo') {
+    return buildZoomInfoProvider(
+      prisma,
+      credentials,
+      orgId,
+      deploymentMode,
+      zoomInfoSearcherFactory,
+      true,
+    );
+  }
+  if (sourcing?.provider === 'apollo') {
+    return buildApolloProvider(
+      prisma,
+      credentials,
+      orgId,
+      apolloAdapter,
+      deploymentMode,
+      true,
+    );
+  }
 
-  // Apollo discovery is self-host-only (vendor ToS). On Cloud, an explicit
-  // request is a clear "not here" message; auto-discovery just skips it.
+  // Auto-discovery (no source attached): prefer ZoomInfo (the org's tested data
+  // service), then fall back to Apollo. A provider that isn't connected / allowed
+  // contributes null and we try the next; a connected-but-broken one surfaces a
+  // graceful "reconnect …" message via SourcingUnavailableError.
+  const viaZoomInfo = await buildZoomInfoProvider(
+    prisma,
+    credentials,
+    orgId,
+    deploymentMode,
+    zoomInfoSearcherFactory,
+    false,
+  );
+  if (viaZoomInfo) return viaZoomInfo;
+  return buildApolloProvider(
+    prisma,
+    credentials,
+    orgId,
+    apolloAdapter,
+    deploymentMode,
+    false,
+  );
+}
+
+/**
+ * Build the Apollo discovery provider, or null when it can't participate in
+ * auto-discovery. `explicit` = the user chose Apollo by name, so a benign
+ * problem (gated on Cloud / not connected / key rejected) becomes an actionable
+ * `SourcingUnavailableError`; in auto-discovery the same problems return null so
+ * the caller can try the next provider. Non-credential errors always bubble.
+ */
+async function buildApolloProvider(
+  prisma: PrismaService,
+  credentials: CredentialManager,
+  orgId: string,
+  apolloAdapter: ApolloOrgSearcher,
+  deploymentMode: DeploymentMode,
+  explicit: boolean,
+): Promise<SourcingProvider | null> {
+  // Apollo discovery is self-host-only (vendor ToS).
   if (!isApolloAllowed(deploymentMode)) {
-    if (sourcing?.provider === 'apollo') {
+    if (explicit) {
       throw new SourcingUnavailableError(
         'Apollo discovery is available on self-hosted getbeyond only.',
       );
     }
     return null;
   }
-
-  // Explicit apollo, OR no source attached (auto-discovery) → try Apollo.
   const account = await prisma.connectorAccount.findUnique({
     where: { orgId_kind: { orgId, kind: 'apollo' } },
     select: { id: true },
   });
   if (!account) {
-    if (sourcing?.provider === 'apollo') {
-      // The user explicitly chose Apollo but hasn't connected it.
+    if (explicit) {
       throw new SourcingUnavailableError(
         'Connect Apollo to discover companies matching your ICP.',
       );
     }
-    // No explicit source and no discovery provider connected → prompt.
     return null;
   }
-
   let creds;
   try {
     creds = await credentials.load(account.id);
@@ -234,12 +296,84 @@ export async function buildSourcingProvider(
     }
     throw err;
   }
-  return new ApolloSourcingProvider(
-    apolloAdapter,
-    creds,
+  return new ApolloSourcingProvider(apolloAdapter, creds, account.id, credentials);
+}
+
+/**
+ * Build the ZoomInfo discovery provider, or null when it can't participate.
+ * Same `explicit` semantics as {@link buildApolloProvider}. ZoomInfo discovery
+ * is self-host-only too (data-redistribution ToS). In auto-discovery a benign
+ * problem returns null so the caller falls back to Apollo.
+ */
+async function buildZoomInfoProvider(
+  prisma: PrismaService,
+  credentials: CredentialManager,
+  orgId: string,
+  deploymentMode: DeploymentMode,
+  searcherFactory: (creds: DecryptedCredentials) => ZoomInfoCompanySearcher,
+  explicit: boolean,
+): Promise<SourcingProvider | null> {
+  if (deploymentMode !== 'self_host') {
+    if (explicit) {
+      throw new SourcingUnavailableError(
+        'ZoomInfo discovery is available on self-hosted getbeyond only.',
+      );
+    }
+    return null;
+  }
+  const account = await prisma.connectorAccount.findUnique({
+    where: { orgId_kind: { orgId, kind: 'zoominfo' } },
+    select: { id: true },
+  });
+  if (!account) {
+    if (explicit) {
+      throw new SourcingUnavailableError(
+        'Connect ZoomInfo to discover companies matching your ICP.',
+      );
+    }
+    return null;
+  }
+  let creds;
+  try {
+    creds = await credentials.load(account.id);
+  } catch (err) {
+    if (err instanceof CredentialManagerError) {
+      // Explicit: surface "reconnect ZoomInfo". Auto: skip + let Apollo try.
+      if (explicit) {
+        throw new SourcingUnavailableError(zoomInfoUnavailableMessage(err.code));
+      }
+      return null;
+    }
+    throw err;
+  }
+  return new ZoomInfoSourcingProvider(
+    searcherFactory(creds),
     account.id,
     credentials,
   );
+}
+
+/** Default factory: a real ZoomInfoClient built from the org's decrypted creds. */
+function defaultZoomInfoSearcherFactory(
+  creds: DecryptedCredentials,
+): ZoomInfoCompanySearcher {
+  return new ZoomInfoClient({
+    clientId: typeof creds['clientId'] === 'string' ? creds['clientId'] : undefined,
+    clientSecret:
+      typeof creds['clientSecret'] === 'string' ? creds['clientSecret'] : undefined,
+  });
+}
+
+/** Map a ZoomInfo credential-load failure to an action-oriented user message. */
+function zoomInfoUnavailableMessage(code: CredentialManagerErrorCode): string {
+  switch (code) {
+    case 'expired':
+      return 'Your ZoomInfo credentials were rejected — reconnect ZoomInfo to keep discovering companies.';
+    case 'circuit_broken':
+      return 'ZoomInfo is temporarily unavailable (too many recent errors). Try again shortly.';
+    default:
+      return 'ZoomInfo isn’t connected. Connect ZoomInfo to discover companies.';
+  }
 }
 
 /** Map a credential-load failure to an action-oriented user message. */

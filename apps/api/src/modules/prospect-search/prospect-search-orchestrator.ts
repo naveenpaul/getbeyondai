@@ -22,6 +22,7 @@ import {
   type FindCandidatesOptions,
   type IcpCriteria,
   type SourcingProvider,
+  type SourcingResult,
 } from '../connectors/sourcing/sourcing-provider';
 import {
   waterfallSourcingService,
@@ -284,7 +285,25 @@ export class ProspectSearchOrchestrator {
       }
       this.deps.emitEvent(sourcingStarted(prospectSearchId, provider.name));
       const opts: FindCandidatesOptions = { limit: candidateLimit };
-      const sourced = await provider.findCandidates(derived.icp, opts);
+      let sourced: SourcingResult;
+      try {
+        sourced = await provider.findCandidates(derived.icp, opts);
+      } catch (err) {
+        // A vendor auth failure / circuit-open DURING discovery (e.g. a 401 from
+        // ZoomInfo/Apollo while searching) is user-fixable, not a search fault:
+        // surface the "reconnect …" message and complete with the ICP still
+        // shown, rather than hard-failing the run. Only SourcingUnavailableError
+        // is treated this way; anything else bubbles to the outer catch so
+        // pg-boss can retry a genuine fault. (Before this, a dead key 401'd mid-
+        // discovery and failed the whole search.)
+        if (err instanceof SourcingUnavailableError) {
+          return await this.completeWithoutSource(
+            prospectSearchId,
+            err.userMessage,
+          );
+        }
+        throw err;
+      }
       this.deps.emitEvent(
         sourcingCompleted(
           prospectSearchId,

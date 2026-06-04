@@ -43,6 +43,13 @@ function describeSource(sourcing?: SourcingConfig | null): ToolEntry {
       detail: 'Prospect pool · reserved (BYO key)',
     };
   }
+  if (sourcing?.provider === 'zoominfo') {
+    return {
+      icon: Database,
+      name: 'ZoomInfo company search',
+      detail: 'Prospect pool · BYO key (self-host)',
+    };
+  }
   return {
     icon: Database,
     name: 'Prospect source',

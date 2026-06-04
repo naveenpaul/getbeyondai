@@ -22,10 +22,14 @@ export type ProspectSearchStatus = 'draft' | 'running' | 'completed' | 'failed';
 //   - `contact_list` (no-key): qualify+rank an imported ContactList.
 //   - `apollo` (BYO key): live company discovery — the derived ICP drives an
 //     Apollo Organization Search. No extra config; the ICP IS the query.
+//   - `zoominfo` (BYO key): live company discovery via ZoomInfo CompanySearch.
+//     Same shape as apollo — the derived ICP IS the query, no extra config.
+//     Self-host-only by default (data-redistribution ToS), like apollo.
 
 export type SourcingConfig =
   | { provider: 'contact_list'; listId: string }
-  | { provider: 'apollo' };
+  | { provider: 'apollo' }
+  | { provider: 'zoominfo' };
 
 // ─── Explicit ICP criteria (user-supplied overrides) ────────────────
 //

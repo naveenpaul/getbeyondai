@@ -10,6 +10,7 @@ import {
   type ApolloOrgSearcher,
   type VendorHealthReporter,
 } from './apollo-sourcing.provider';
+import { SourcingUnavailableError } from './sourcing-provider';
 import type { IcpCriteria } from './sourcing-provider';
 
 /**
@@ -150,6 +151,33 @@ describe('ApolloSourcingProvider.findCandidates', () => {
     lastParams()?.onVendorSuccess?.();
     expect(health.reportVendorFailure).toHaveBeenCalledWith('acct-9', 'server_5xx');
     expect(health.reportVendorSuccess).toHaveBeenCalledWith('acct-9');
+  });
+
+  it('maps a key rejection mid-search to a graceful SourcingUnavailableError', async () => {
+    // The adapter reports an auth failure via the breaker hook, then throws —
+    // exactly the live 401 path. The provider must convert it to the graceful
+    // "reconnect" signal, not let a raw error fail the whole search.
+    const adapter: ApolloOrgSearcher = {
+      async *searchOrganizations(params) {
+        await params.onVendorFailure?.('auth_invalid');
+        throw new Error('Apollo rejected the API key (HTTP 401)');
+      },
+    };
+    const provider = new ApolloSourcingProvider(adapter, CREDS, 'acct', noopHealth());
+    await expect(provider.findCandidates(icp())).rejects.toBeInstanceOf(
+      SourcingUnavailableError,
+    );
+  });
+
+  it('rethrows a non-auth error (5xx/transport) so pg-boss can retry', async () => {
+    const adapter: ApolloOrgSearcher = {
+      async *searchOrganizations(params) {
+        await params.onVendorFailure?.('server_5xx');
+        throw new Error('Apollo server error (HTTP 503)');
+      },
+    };
+    const provider = new ApolloSourcingProvider(adapter, CREDS, 'acct', noopHealth());
+    await expect(provider.findCandidates(icp())).rejects.toThrow(/503/);
   });
 
   it('summarizes a zero-result search', async () => {

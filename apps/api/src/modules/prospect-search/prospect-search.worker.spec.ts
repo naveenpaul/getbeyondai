@@ -5,6 +5,7 @@ import {
   CredentialManagerError,
 } from '../connectors/credential-manager';
 import { ApolloSourcingProvider } from '../connectors/sourcing/apollo-sourcing.provider';
+import { ZoomInfoSourcingProvider } from '../connectors/sourcing/zoominfo-sourcing.provider';
 import { ContactListSourcingProvider } from '../connectors/sourcing/contact-list-sourcing.provider';
 import { SourcingUnavailableError } from '../connectors/sourcing/sourcing-provider';
 import { buildContactSourcers, buildSourcingProvider } from './prospect-search.worker';
@@ -19,13 +20,38 @@ import { buildContactSourcers, buildSourcingProvider } from './prospect-search.w
 const emptyPrisma = {} as unknown as PrismaService;
 const noCreds = {} as unknown as CredentialManager;
 
-/** A prisma stub whose connectorAccount.findUnique returns `account`. */
+/**
+ * A prisma stub whose connectorAccount.findUnique returns `account` ONLY for the
+ * apollo kind (null for zoominfo/others). Kind-aware so auto-discovery — which
+ * now tries ZoomInfo before Apollo — correctly skips ZoomInfo (no account) and
+ * lands on Apollo in these Apollo-focused tests.
+ */
 function prismaWithApolloAccount(
   account: { id: string } | null,
 ): PrismaService {
   return {
     connectorAccount: {
-      findUnique: async () => account,
+      findUnique: async ({
+        where,
+      }: {
+        where: { orgId_kind: { kind: string } };
+      }) => (where.orgId_kind.kind === 'apollo' ? account : null),
+    },
+  } as unknown as PrismaService;
+}
+
+/** A prisma stub returning an account for exactly the given connector kinds. */
+function prismaWithKinds(kinds: Set<string>): PrismaService {
+  return {
+    connectorAccount: {
+      findUnique: async ({
+        where,
+      }: {
+        where: { orgId_kind: { kind: string } };
+      }) =>
+        kinds.has(where.orgId_kind.kind)
+          ? { id: `acct-${where.orgId_kind.kind}` }
+          : null,
     },
   } as unknown as PrismaService;
 }
@@ -158,6 +184,105 @@ describe('buildSourcingProvider on Cloud (Apollo is self-host-only)', () => {
       'cloud',
     );
     expect(provider).toBeInstanceOf(ContactListSourcingProvider);
+  });
+});
+
+describe('buildSourcingProvider — ZoomInfo discovery', () => {
+  // A fake ZoomInfo searcher + factory; build-time doesn't call it, so an empty
+  // stub suffices to assert provider selection.
+  const fakeFactory = () => ({ searchCompanies: async () => ({ data: [] }) });
+  const ziCreds = {
+    load: async () => ({ clientId: 'id', clientSecret: 'sec' }),
+  } as unknown as CredentialManager;
+
+  it('builds a ZoomInfoSourcingProvider for an explicit zoominfo source', async () => {
+    const prisma = prismaWithKinds(new Set(['zoominfo']));
+    const provider = await buildSourcingProvider(
+      prisma,
+      ziCreds,
+      'org-1',
+      { provider: 'zoominfo' },
+      undefined,
+      'self_host',
+      fakeFactory,
+    );
+    expect(provider).toBeInstanceOf(ZoomInfoSourcingProvider);
+  });
+
+  it('throws a user-fixable error when ZoomInfo is not connected', async () => {
+    const prisma = prismaWithKinds(new Set());
+    await expect(
+      buildSourcingProvider(
+        prisma,
+        ziCreds,
+        'org-1',
+        { provider: 'zoominfo' },
+        undefined,
+        'self_host',
+        fakeFactory,
+      ),
+    ).rejects.toThrow(/Connect ZoomInfo/i);
+  });
+
+  it('refuses explicit ZoomInfo on Cloud (self-host-only)', async () => {
+    const prisma = prismaWithKinds(new Set(['zoominfo']));
+    await expect(
+      buildSourcingProvider(
+        prisma,
+        ziCreds,
+        'org-1',
+        { provider: 'zoominfo' },
+        undefined,
+        'cloud',
+        fakeFactory,
+      ),
+    ).rejects.toThrow(/self-hosted getbeyond only/i);
+  });
+
+  it('maps expired ZoomInfo creds to a "reconnect" message', async () => {
+    const prisma = prismaWithKinds(new Set(['zoominfo']));
+    const credentials = credentialsThatThrow(
+      new CredentialManagerError('expired', 'rejected'),
+    );
+    await expect(
+      buildSourcingProvider(
+        prisma,
+        credentials,
+        'org-1',
+        { provider: 'zoominfo' },
+        undefined,
+        'self_host',
+        fakeFactory,
+      ),
+    ).rejects.toThrow(/reconnect ZoomInfo/i);
+  });
+
+  it('auto-discovery PREFERS ZoomInfo when both ZoomInfo and Apollo are connected', async () => {
+    const prisma = prismaWithKinds(new Set(['zoominfo', 'apollo']));
+    const provider = await buildSourcingProvider(
+      prisma,
+      ziCreds,
+      'org-1',
+      null,
+      undefined,
+      'self_host',
+      fakeFactory,
+    );
+    expect(provider).toBeInstanceOf(ZoomInfoSourcingProvider);
+  });
+
+  it('auto-discovery falls back to Apollo when ZoomInfo is not connected', async () => {
+    const prisma = prismaWithKinds(new Set(['apollo']));
+    const provider = await buildSourcingProvider(
+      prisma,
+      ziCreds,
+      'org-1',
+      null,
+      undefined,
+      'self_host',
+      fakeFactory,
+    );
+    expect(provider).toBeInstanceOf(ApolloSourcingProvider);
   });
 });
 

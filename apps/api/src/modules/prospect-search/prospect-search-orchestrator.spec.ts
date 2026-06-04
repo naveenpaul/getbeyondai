@@ -799,6 +799,50 @@ describe('ProspectSearchOrchestrator', () => {
       ]);
     });
 
+    it('completes gracefully when findCandidates throws SourcingUnavailableError mid-discovery (e.g. vendor 401)', async () => {
+      const prisma = makeFakePrisma();
+      const llm = makeFakeLlm(() => ({ text: icpJson() }));
+
+      // Provider builds fine, but discovery hits a rejected key — the exact bug
+      // that used to FAIL the whole search. It must now complete gracefully.
+      const provider: SourcingProvider = {
+        name: 'zoominfo',
+        findCandidates: vi.fn(async () => {
+          throw new SourcingUnavailableError(
+            'ZoomInfo rejected the credentials — reconnect ZoomInfo.',
+          );
+        }),
+      };
+
+      const orchestrator = new ProspectSearchOrchestrator({
+        prisma,
+        llm,
+        buildSourcingProvider: async () => provider,
+        emitEvent,
+        runResearch: makeRunResearch(() => researchCompleted('d1')),
+      });
+
+      const result = await orchestrator.run({
+        prospectSearchId: 'camp-discovery-401',
+        orgId: 'org-1',
+        triggeredBy: 'user-1',
+        goal: 'g',
+        winsListId: null,
+        budgetCents: 1000,
+      });
+
+      expect(result.status).toBe('completed');
+      expect(result.prospectCount).toBe(0);
+      // sourcing_started fired (provider built), then graceful completion.
+      expect(types()).toEqual([
+        'search_started',
+        'icp_derived',
+        'sourcing_started',
+        'sourcing_completed',
+        'search_completed',
+      ]);
+    });
+
     it('marks the ICP AgentRun failed (terminal) when the ICP model call throws', async () => {
       const prisma = makeFakePrisma();
       const llm: LlmProvider = {

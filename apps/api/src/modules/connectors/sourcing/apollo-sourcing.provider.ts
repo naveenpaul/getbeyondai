@@ -3,6 +3,7 @@ import type {
   ApolloOrgSearchCriteria,
   ApolloOrgSearchParams,
 } from '../adapters/apollo/apollo.source';
+import { SourcingUnavailableError } from './sourcing-provider';
 import type {
   CandidateCompany,
   FindCandidatesOptions,
@@ -88,24 +89,42 @@ export class ApolloSourcingProvider implements SourcingProvider {
     // Apollo's results becomes one candidate. `maxOrgs` caps raw pulls for cost
     // control; the post-dedupe count may land slightly under `limit`.
     const byKey = new Map<string, CandidateCompany>();
-    for await (const org of this.adapter.searchOrganizations({
-      creds: this.creds,
-      config: { search: criteria, maxOrgs: limit },
-      onVendorFailure: (kind) =>
-        this.health.reportVendorFailure(this.accountId, kind),
-      onVendorSuccess: () => this.health.reportVendorSuccess(this.accountId),
-    })) {
-      const key = (org.domain ?? org.name).toLowerCase();
-      if (byKey.has(key)) continue;
-      byKey.set(key, {
-        name: org.name,
-        domain: org.domain,
-        linkedinUrl: org.linkedinUrl,
-        employeeCount: org.employeeCount,
-        fundingStage: org.fundingStage,
-        raw: org.raw,
-      });
-      if (limit !== undefined && byKey.size >= limit) break;
+    // Track an auth rejection surfaced via the breaker hook so we can convert a
+    // mid-search 401/403 into the graceful "reconnect" path below.
+    let authFailed = false;
+    try {
+      for await (const org of this.adapter.searchOrganizations({
+        creds: this.creds,
+        config: { search: criteria, maxOrgs: limit },
+        onVendorFailure: (kind) => {
+          if (kind === 'auth_invalid') authFailed = true;
+          return this.health.reportVendorFailure(this.accountId, kind);
+        },
+        onVendorSuccess: () => this.health.reportVendorSuccess(this.accountId),
+      })) {
+        const key = (org.domain ?? org.name).toLowerCase();
+        if (byKey.has(key)) continue;
+        byKey.set(key, {
+          name: org.name,
+          domain: org.domain,
+          linkedinUrl: org.linkedinUrl,
+          employeeCount: org.employeeCount,
+          fundingStage: org.fundingStage,
+          raw: org.raw,
+        });
+        if (limit !== undefined && byKey.size >= limit) break;
+      }
+    } catch (err) {
+      // A rejected key (401/403) thrown mid-search is user-fixable, not a run
+      // fault — map it to the graceful path so the orchestrator surfaces
+      // "reconnect Apollo" and completes (ICP still shown) instead of failing
+      // the whole search. Other errors (5xx, transport) bubble for pg-boss retry.
+      if (authFailed) {
+        throw new SourcingUnavailableError(
+          'Apollo rejected the API key — reconnect Apollo to keep discovering companies.',
+        );
+      }
+      throw err;
     }
 
     const candidates = [...byKey.values()];
