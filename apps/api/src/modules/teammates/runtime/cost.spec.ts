@@ -36,11 +36,20 @@ describe('costCentsForCall', () => {
     ).toBe(80);
   });
 
-  it('rounds sub-cent calls UP (avoid silent under-billing)', () => {
-    // sonnet 100 input tokens = 0.03 cents → rounds to 1.
+  it('rounds sub-cent calls to the nearest cent (not up — unbiased over many calls)', () => {
+    // 100 sonnet input tokens = 0.03 cents → rounds DOWN to 0 (was ceil→1).
+    // Ceiling every tiny call inflated the displayed total across the hundreds
+    // of sub-cent calls a prospect search makes.
     expect(
       costCentsForCall('claude-sonnet-4-6', {
         inputTokens: 100,
+        outputTokens: 0,
+      }),
+    ).toBe(0);
+    // 2000 sonnet input tokens = 0.6 cents → rounds UP to 1.
+    expect(
+      costCentsForCall('claude-sonnet-4-6', {
+        inputTokens: 2000,
         outputTokens: 0,
       }),
     ).toBe(1);

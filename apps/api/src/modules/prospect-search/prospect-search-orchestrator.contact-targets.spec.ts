@@ -21,15 +21,34 @@ function cand(over: Partial<ContactTargetInput>): ContactTargetInput {
 }
 
 describe('selectContactTargets', () => {
-  it('includes only qualified companies (fitScore > 0)', () => {
+  it('includes only companies at/above the default fit threshold (0.6)', () => {
     const result = selectContactTargets(
       [
-        cand({ prospectId: 'a', fitScore: 0.9 }),
-        cand({ prospectId: 'b', fitScore: 0 }), // not qualified
+        cand({ prospectId: 'a', fitScore: 0.9 }), // clears the bar
+        cand({ prospectId: 'b', fitScore: 0.5 }), // weak match — excluded
+        cand({ prospectId: 'c', fitScore: 0 }), // not qualified — excluded
       ],
       10,
     );
     expect(result.map((t) => t.prospectId)).toEqual(['a']);
+  });
+
+  it('includes a company exactly at the threshold (>=)', () => {
+    const result = selectContactTargets([cand({ fitScore: 0.6 })], 10);
+    expect(result).toHaveLength(1);
+  });
+
+  it('honors an explicit minFitScore override', () => {
+    const ranked = [
+      cand({ prospectId: 'a', fitScore: 0.55 }),
+      cand({ prospectId: 'b', fitScore: 0.3 }),
+    ];
+    // Lower the bar to 0.5 → only `a` qualifies.
+    expect(selectContactTargets(ranked, 10, 0.5).map((t) => t.prospectId)).toEqual([
+      'a',
+    ]);
+    // Raise it to 0.9 → none qualify.
+    expect(selectContactTargets(ranked, 10, 0.9)).toEqual([]);
   });
 
   it('excludes companies without a domain (waterfall has no input)', () => {

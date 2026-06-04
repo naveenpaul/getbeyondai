@@ -799,6 +799,71 @@ describe('ProspectSearchOrchestrator', () => {
       ]);
     });
 
+    it('runs research on the fast model and ICP + scoring on the primary model', async () => {
+      const prisma = makeFakePrisma();
+      const llmModels: string[] = [];
+      const llm: LlmProvider = {
+        name: 'fake',
+        capabilities: {
+          promptCaching: false,
+          toolUse: true,
+          systemPrompt: true,
+        } as unknown as LlmProvider['capabilities'],
+        createMessage: vi.fn(
+          async (params: { model: string }): Promise<CreateMessageResult> => {
+            llmModels.push(params.model);
+            // First llm call = ICP derivation; the rest = fit scoring.
+            const text =
+              llmModels.length === 1
+                ? icpJson()
+                : JSON.stringify({ fitScore: 0.9, rationale: 'ok' });
+            return {
+              content: [{ type: 'text', text }],
+              stopReason: 'end',
+              usage: { inputTokens: 10, outputTokens: 10 },
+              model: params.model,
+            };
+          },
+        ),
+      };
+      let researchModel = '';
+      const research = vi.fn(
+        async (_deps: unknown, input: { modelName?: string }) => {
+          researchModel = input.modelName ?? '';
+          return researchCompleted('draft-a');
+        },
+      ) as unknown as typeof runResearch;
+
+      const orchestrator = new ProspectSearchOrchestrator({
+        prisma,
+        llm,
+        buildSourcingProvider: async () =>
+          makeSourcingProvider([prospect('Alpha', 'alpha.com')]),
+        emitEvent,
+        runResearch: research,
+      });
+
+      await orchestrator.run({
+        prospectSearchId: 'camp-models',
+        orgId: 'org-1',
+        triggeredBy: 'user-1',
+        goal: 'g',
+        winsListId: null,
+        concurrency: 1,
+        budgetCents: 1000,
+        // Real priced model ids — ICP + scoring route through callModel, which
+        // prices the call (an unpriced fake id would throw UnknownModelError).
+        modelName: 'claude-sonnet-4-6',
+        researchModelName: 'claude-haiku-4-5-20251001',
+      });
+
+      // Research ran on the fast model; ICP derivation + fit scoring (the only
+      // direct llm calls) ran on the primary model.
+      expect(researchModel).toBe('claude-haiku-4-5-20251001');
+      expect(llmModels.length).toBeGreaterThanOrEqual(2); // icp + ≥1 score
+      expect(new Set(llmModels)).toEqual(new Set(['claude-sonnet-4-6']));
+    });
+
     it('completes gracefully when findCandidates throws SourcingUnavailableError mid-discovery (e.g. vendor 401)', async () => {
       const prisma = makeFakePrisma();
       const llm = makeFakeLlm(() => ({ text: icpJson() }));

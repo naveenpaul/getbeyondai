@@ -106,6 +106,13 @@ export const CONTACT_SOURCING_DEFAULTS = {
   contactsPerCompany: 10,
   /** Waterfall threshold — chase a verified email across connectors. */
   threshold: 'verified' as const,
+  /**
+   * Minimum fitScore a company must reach before we spend connector credits
+   * sourcing its contacts. Sourcing is the expensive step (real ZoomInfo/Snov
+   * credits), so it must only run on genuinely good matches — a weakly-matched
+   * company (e.g. right country, wrong everything else) should never reach it.
+   */
+  minFitScore: 0.6,
 } as const;
 
 /** A ranked prospect slimmed to what Stage 5 target-selection needs. */
@@ -126,11 +133,14 @@ export interface ContactTargetInput {
 export function selectContactTargets(
   ranked: ReadonlyArray<ContactTargetInput>,
   limit: number,
+  minFitScore: number = CONTACT_SOURCING_DEFAULTS.minFitScore,
 ): Array<{ prospectId: string; name: string; domain: string }> {
   const out: Array<{ prospectId: string; name: string; domain: string }> = [];
   for (const r of ranked) {
     if (out.length >= limit) break;
-    if (r.fitScore > 0 && r.domain) {
+    // Only spend connector credits on companies that actually clear the fit bar
+    // AND have a domain to source against.
+    if (r.fitScore >= minFitScore && r.domain) {
       out.push({ prospectId: r.prospectId, name: r.name, domain: r.domain });
     }
   }
@@ -156,8 +166,17 @@ export interface OrchestrateProspectSearchInput {
   budgetCents?: number;
   candidateLimit?: number;
   concurrency?: number;
-  /** Resolved model (P5); defaults to the prospectSearch default when absent. */
+  /** Resolved primary model (P5); used for ICP derivation + fit scoring. */
   modelName?: string;
+  /**
+   * Resolved FAST model; used for the per-candidate Researcher loop (the
+   * high-volume, extraction-heavy, cost-dominant step). Defaults to the primary
+   * model when absent. Research accuracy is protected by the cite-or-abstain
+   * runtime guardrail, so a cheaper model degrades to thinner briefs, not wrong
+   * facts — while ICP derivation + scoring stay on the primary model for
+   * judgment quality.
+   */
+  researchModelName?: string;
 }
 
 export interface ProspectSearchOrchestratorDeps {
@@ -219,10 +238,18 @@ export class ProspectSearchOrchestrator {
   // the orchestrator is constructed per-run, run() is called once, and every
   // prospect in a run uses the same model.
   private modelName: string = PROSPECT_SEARCH_DEFAULTS.modelName;
+  // Fast model for the per-candidate Researcher loop (set at run() start; falls
+  // back to the primary model). Research is the cost-dominant step and is
+  // extraction-heavy, so the cheaper model fits; cite-or-abstain keeps it honest.
+  private researchModelName: string = PROSPECT_SEARCH_DEFAULTS.modelName;
   // Stage 5 verification threshold for this run (set at run() start). Same
   // per-run-instance justification as modelName.
   private contactThreshold: 'verified' | 'any' =
     CONTACT_SOURCING_DEFAULTS.threshold;
+  // The user's original goal (set at run() start). The fit-scorer scores against
+  // the FULL goal, not just the (lossy) structured ICP — so a company matching
+  // only part of the intent can't score 1.0. Per-run instance, like modelName.
+  private goal = '';
 
   constructor(deps: ProspectSearchOrchestratorDeps) {
     this.deps = deps;
@@ -244,8 +271,11 @@ export class ProspectSearchOrchestrator {
       input.candidateLimit ?? PROSPECT_SEARCH_DEFAULTS.candidateLimit;
     const concurrency = input.concurrency ?? PROSPECT_SEARCH_DEFAULTS.concurrency;
     this.modelName = input.modelName ?? PROSPECT_SEARCH_DEFAULTS.modelName;
+    this.researchModelName =
+      input.researchModelName ?? this.modelName;
     this.contactThreshold =
       input.contactThreshold ?? CONTACT_SOURCING_DEFAULTS.threshold;
+    this.goal = input.goal;
 
     this.deps.emitEvent(searchStarted(prospectSearchId, input.goal));
 
@@ -723,7 +753,9 @@ export class ProspectSearchOrchestrator {
           orgId: params.orgId,
           triggeredBy: params.triggeredBy,
           target,
-          modelName: this.modelName,
+          // Research uses the FAST model (cost-dominant, extraction-heavy step);
+          // scoring below stays on the primary model for ranking quality.
+          modelName: this.researchModelName,
           budgetCents: params.budgetCents,
         },
       );
@@ -824,6 +856,7 @@ export class ProspectSearchOrchestrator {
               {
                 type: 'text',
                 text: buildCandidateScoringUserPrompt(
+                  this.goal,
                   params.icp,
                   params.candidateName,
                   params.brief,

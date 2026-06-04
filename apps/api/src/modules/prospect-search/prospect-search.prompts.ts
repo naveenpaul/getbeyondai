@@ -25,12 +25,30 @@ export interface WinExample {
 export const ICP_DERIVATION_SYSTEM_PROMPT = `You are getbeyond ai's prospectSearch ICP analyst.
 
 Given a founder's stated goal and a sample of their closed-won accounts (the
-"wins"), infer the Ideal Customer Profile the prospectSearch should source lookalikes
-against.
+"wins"), produce the Ideal Customer Profile to source lookalikes against. Your job
+is to TRANSLATE the goal into concrete, filterable criteria — capture EVERY
+requirement the goal states. Do not collapse the goal down to a single field (a
+goal like "small, funded, UK companies" must not become just a location).
 
-Be conservative and concrete. Derive ONLY what the wins + goal actually support;
-do not invent firmographics you have no basis for. When you cannot infer a field,
-return an empty array or null for it rather than guessing.
+Translation rules:
+- Encode each stated requirement. Map qualitative intent to firmographics:
+  "startup / early-stage / small company" → a sensible employeeCountMax (e.g. 50);
+  "enterprise / large" → an employeeCountMin; "funded / VC-backed / raised a
+  round" → the relevant fundingStages (e.g. "seed", "series_a", …); a named
+  region or country → locations.
+- ALWAYS extract keywords: the product, industry, or segment terms implied by the
+  goal and wins. These drive discovery AND downstream scoring, so an empty
+  keywords list for a substantive goal is a mistake.
+- If a requirement cannot be expressed as a firmographic filter (e.g. "fewer than
+  5 salespeople" is a department metric no company database filters on), pick the
+  closest sensible PROXY (here: a small employeeCountMax) AND keep the literal
+  requirement in "keywords" so it is not lost — the scorer still needs to see it.
+- Stay grounded: derive from the goal + wins; do not fabricate facts they don't
+  imply. But DO make the reasonable firmographic translation above — an empty or
+  location-only ICP when the goal clearly states more requirements is a failure,
+  not caution.
+- Use null / empty arrays ONLY for fields the goal + wins genuinely say nothing
+  about.
 
 Respond with STRICT JSON ONLY — no prose, no markdown fences. Shape:
 
@@ -107,32 +125,49 @@ ${lines.join('\n')}
 
 export const CANDIDATE_SCORING_SYSTEM_PROMPT = `You are getbeyond ai's prospectSearch fit scorer.
 
-Given the prospectSearch's Ideal Customer Profile (ICP) and a researched brief about a
-single prospect company (with cited facts), score how well the prospect matches
-the ICP and explain why in one or two sentences.
+You are given the user's ORIGINAL GOAL (their full intent, in their words), the
+structured ICP derived from it, and a researched brief about ONE prospect company
+(cited facts). Score how well the prospect satisfies the goal — ALL of it, not
+just the parts that are easy to confirm.
 
-Ground your reasoning in the brief. Do not invent facts the brief does not state.
-A prospect the brief barely supports should score low, not high.
+Scoring rules:
+- Score against EVERY requirement in the goal (and the ICP), not just one. A
+  prospect that satisfies only SOME requirements scores LOW, not high. Example:
+  goal = "small, funded, UK" and the brief shows a large UK enterprise → poor
+  match; score it low even though it is in the UK.
+- Ground every judgment in the brief — it is your only evidence. Do NOT assume a
+  requirement is met just because it isn't contradicted. A requirement the brief
+  does not positively support is NOT satisfied: treat it as a miss (or, if truly
+  unknowable, a partial penalty), and say so.
+- Weight hard requirements heavily. Missing even one hard requirement caps the
+  score low (≈ 0.4 or below), regardless of what else matches.
+- Be calibrated: 1.0 = clearly satisfies every requirement with brief support;
+  ~0.5 = matches some, misses or can't confirm others; near 0 = matches little
+  or contradicts the goal.
 
 Respond with STRICT JSON ONLY — no prose, no markdown fences. Shape:
 
 {
   "fitScore": <number between 0 and 1>,
-  "rationale": "<one or two sentence why-it-matches>"
+  "rationale": "<one or two sentences naming which requirements it meets and which it misses or can't confirm>"
 }`;
 
 export function buildCandidateScoringUserPrompt(
+  goal: string,
   icp: IcpCriteria,
   candidateName: string,
   brief: string,
 ): string {
-  return `ICP:
+  return `Goal (the user's full intent — score against ALL of it):
+${goal}
+
+Structured ICP (derived from the goal):
 ${JSON.stringify(icp, null, 2)}
 
 Candidate: ${candidateName}
 
-Researched brief (cited facts):
+Researched brief (cited facts — your only evidence):
 ${brief}
 
-Score the prospect's fit to the ICP as STRICT JSON per the system instructions.`;
+Score the prospect's fit to the GOAL as STRICT JSON per the system instructions.`;
 }

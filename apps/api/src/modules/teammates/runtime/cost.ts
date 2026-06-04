@@ -91,9 +91,15 @@ export function costCentsForCall(
     (cacheRead / 1_000_000) * rate.inputPerMillion * CACHE_READ_MULTIPLIER;
   const cacheWriteDollars =
     (cacheWrite / 1_000_000) * rate.inputPerMillion * CACHE_WRITE_MULTIPLIER;
-  // Multiply by 100 → cents. Use ceil so a sub-cent call rounds up to 1 cent
-  // (avoid silent under-billing on tiny calls).
-  return Math.ceil(
+  // Multiply by 100 → cents, rounded to the nearest cent. We deliberately do NOT
+  // ceil: a prospect search makes hundreds of sub-cent model calls (one per
+  // Researcher turn), and ceiling EVERY call up to ≥1 cent systematically
+  // over-reports the total by ~0.5 cent/call (≈ $1+ per search) — a usage
+  // display that reads far above the real provider bill. Rounding is unbiased
+  // across many calls, so summed costs track the actual spend. (Sub-cent
+  // granularity is inherently lossy in integer cents; a finer-grained column is
+  // the follow-up if exact per-call cost is ever needed.)
+  return Math.round(
     (inputDollars + outputDollars + cacheReadDollars + cacheWriteDollars) * 100,
   );
 }

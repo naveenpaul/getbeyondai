@@ -113,10 +113,8 @@ export class ProspectSearchWorker implements OnModuleInit {
         try {
           // Resolve the per-run provider (org BYO → env → block). A "no key"
           // failure is caught below → search_failed on the stream.
-          const { provider, modelPrimary } = await this.resolver.resolve(
-            data.orgId,
-            PROSPECT_SEARCH_TEAMMATE,
-          );
+          const { provider, modelPrimary, modelFast } =
+            await this.resolver.resolve(data.orgId, PROSPECT_SEARCH_TEAMMATE);
           // Per-org Stage 5 tuning (connector priority + verification threshold);
           // defaults when the org never configured it.
           const sourcingConfig = await resolveOrgSourcingConfig(
@@ -155,6 +153,9 @@ export class ProspectSearchWorker implements OnModuleInit {
             icpCriteria: data.icpCriteria,
             contactThreshold: sourcingConfig.threshold,
             modelName: modelPrimary,
+            // Per-candidate research runs on the fast model (cost-dominant);
+            // ICP derivation + scoring use modelPrimary for judgment quality.
+            researchModelName: modelFast,
             budgetCents: data.budgetCents,
           });
           this.logger.log(

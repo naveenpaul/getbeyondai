@@ -127,8 +127,8 @@ describe('callModel — happy path', () => {
     });
 
     // sonnet: 1000 input @ $3/M + 500 output @ $15/M
-    //   = 0.003 + 0.0075 = 0.0105 USD = 1.05 cents → ceil 2 cents.
-    expect(result.costCents).toBe(2);
+    //   = 0.003 + 0.0075 = 0.0105 USD = 1.05 cents → rounds to 1 cent.
+    expect(result.costCents).toBe(1);
     expect(result.message.content[0]).toMatchObject({ type: 'text' });
     expect(prisma._modelCalls).toHaveLength(1);
     expect(prisma._modelCalls[0]).toMatchObject({
@@ -136,9 +136,9 @@ describe('callModel — happy path', () => {
       modelName: 'claude-sonnet-4-6',
       inputTokens: 1000,
       outputTokens: 500,
-      costCents: 2,
+      costCents: 1,
     });
-    expect(prisma._runs.get('run-1')?.costCents).toBe(2);
+    expect(prisma._runs.get('run-1')?.costCents).toBe(1);
     expect(result.modelCallId).toBe('mc-1');
   });
 
@@ -177,7 +177,7 @@ describe('callModel — happy path', () => {
       budgetCents: 100,
     });
 
-    expect(prisma._runs.get('run-1')?.costCents).toBe(4); // 2 + 2
+    expect(prisma._runs.get('run-1')?.costCents).toBe(2); // 1 + 1
     expect(prisma._modelCalls).toHaveLength(2);
   });
 
@@ -290,8 +290,9 @@ describe('callModel — preflight + budget enforcement', () => {
 
   it('post-check passes when current + new cost exactly equals budget', async () => {
     const prisma = makeFakePrisma({ ...BASE_RUN, costCents: 98 });
-    // Cost 2¢ → 98 + 2 = 100 = budget.
-    const provider = makeFakeProvider(fakeResult(1000, 500));
+    // 1000 in @ $3/M + 1000 out @ $15/M = 0.3 + 1.5 = 1.8¢ → rounds to 2¢.
+    // 98 + 2 = 100 = budget (post-check passes at exact equality).
+    const provider = makeFakeProvider(fakeResult(1000, 1000));
 
     await expect(
       callModel(prisma as never, provider, {
