@@ -87,8 +87,9 @@ import {
 
 /** Default tuning. Production callers stick with these. */
 export const PROSPECT_SEARCH_DEFAULTS = {
-  /** Candidate pool cap — how many companies to qualify. */
-  candidateLimit: 25,
+  /** Candidate pool cap — how many companies to source + qualify. Capped low
+   *  for now to conserve provider credits (PDL bills per record) + speed runs. */
+  candidateLimit: 10,
   /** Per-prospectSearch hard cost cap (cents). Sum across all prospect runs. */
   budgetCents: 500,
   /** Per-prospect Researcher budget (cents). */
