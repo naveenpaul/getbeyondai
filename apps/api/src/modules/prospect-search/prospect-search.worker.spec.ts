@@ -7,6 +7,7 @@ import {
 import { ApolloSourcingProvider } from '../connectors/sourcing/apollo-sourcing.provider';
 import { ZoomInfoSourcingProvider } from '../connectors/sourcing/zoominfo-sourcing.provider';
 import { ContactListSourcingProvider } from '../connectors/sourcing/contact-list-sourcing.provider';
+import { FallbackSourcingProvider } from '../connectors/sourcing/fallback-sourcing.provider';
 import { SourcingUnavailableError } from '../connectors/sourcing/sourcing-provider';
 import type { IcpCriteria } from '../connectors/sourcing/sourcing-provider';
 import {
@@ -279,7 +280,11 @@ describe('buildSourcingProvider — ZoomInfo discovery', () => {
       'self_host',
       fakeFactory,
     );
-    expect(provider).toBeInstanceOf(ZoomInfoSourcingProvider);
+    // Both connected → a fallback chain, ZoomInfo first.
+    expect(provider).toBeInstanceOf(FallbackSourcingProvider);
+    expect((provider as FallbackSourcingProvider).providers[0]).toBeInstanceOf(
+      ZoomInfoSourcingProvider,
+    );
   });
 
   it('auto-discovery falls back to Apollo when ZoomInfo is not connected', async () => {
@@ -435,7 +440,11 @@ describe('buildSourcingProvider — PDL + geo-aware routing', () => {
       prisma, creds, 'org-1', null,
       undefined, undefined, fakeZi, icp(['Bengaluru']), fakePdl,
     );
-    expect(provider).toBeInstanceOf(PdlSourcingProvider);
+    // Two providers connected → a fallback chain, PDL first (city-capable).
+    expect(provider).toBeInstanceOf(FallbackSourcingProvider);
+    expect((provider as FallbackSourcingProvider).providers[0]).toBeInstanceOf(
+      PdlSourcingProvider,
+    );
   });
 
   it('auto-discovery prefers ZoomInfo for a country-level ICP (cheaper-first)', async () => {
@@ -444,7 +453,11 @@ describe('buildSourcingProvider — PDL + geo-aware routing', () => {
       prisma, creds, 'org-1', null,
       undefined, undefined, fakeZi, icp(['India']), fakePdl,
     );
-    expect(provider).toBeInstanceOf(ZoomInfoSourcingProvider);
+    // Two providers connected → a fallback chain, ZoomInfo first (cheaper).
+    expect(provider).toBeInstanceOf(FallbackSourcingProvider);
+    expect((provider as FallbackSourcingProvider).providers[0]).toBeInstanceOf(
+      ZoomInfoSourcingProvider,
+    );
   });
 
   it('falls back to PDL in auto-discovery when it is the only source connected', async () => {
@@ -454,6 +467,22 @@ describe('buildSourcingProvider — PDL + geo-aware routing', () => {
       undefined, undefined, fakeZi, icp(['India']), fakePdl,
     );
     expect(provider).toBeInstanceOf(PdlSourcingProvider);
+  });
+
+  it('chains ALL connected providers in capability order for runtime fallback (PDL out → Apollo → ZoomInfo)', async () => {
+    // The live scenario: PDL connected-but-out-of-credits, Apollo + ZoomInfo too.
+    const prisma = prismaWithKinds(new Set(['pdl', 'apollo', 'zoominfo']));
+    const provider = await buildSourcingProvider(
+      prisma, creds, 'org-1', null,
+      undefined, undefined, fakeZi, icp(['Bengaluru']), fakePdl,
+    );
+    expect(provider).toBeInstanceOf(FallbackSourcingProvider);
+    // City order → PDL first, then the global/capable Apollo, ZoomInfo last.
+    expect((provider as FallbackSourcingProvider).providers.map((p) => p.name)).toEqual([
+      'pdl',
+      'apollo',
+      'zoominfo',
+    ]);
   });
 });
 
