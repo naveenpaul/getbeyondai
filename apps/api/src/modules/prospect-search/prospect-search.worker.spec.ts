@@ -8,7 +8,13 @@ import { ApolloSourcingProvider } from '../connectors/sourcing/apollo-sourcing.p
 import { ZoomInfoSourcingProvider } from '../connectors/sourcing/zoominfo-sourcing.provider';
 import { ContactListSourcingProvider } from '../connectors/sourcing/contact-list-sourcing.provider';
 import { SourcingUnavailableError } from '../connectors/sourcing/sourcing-provider';
-import { buildContactSourcers, buildSourcingProvider } from './prospect-search.worker';
+import { PdlEnrichmentProvider } from '../connectors/enrichment/pdl-enrichment.provider';
+import type { PdlCompanyEnricher } from '../connectors/enrichment/pdl-enrichment.provider';
+import {
+  buildContactSourcers,
+  buildEnrichmentProvider,
+  buildSourcingProvider,
+} from './prospect-search.worker';
 
 /**
  * Unit tests for the worker's `buildSourcingProvider` factory. The worker class
@@ -379,3 +385,63 @@ function credentialsThatThrow(err: Error): CredentialManager {
     },
   } as unknown as CredentialManager;
 }
+
+describe('buildEnrichmentProvider', () => {
+  const stubPdl: PdlCompanyEnricher = { enrichCompany: async () => null };
+
+  it('returns null when PDL is not connected', async () => {
+    const prisma = prismaWithKinds(new Set());
+    expect(
+      await buildEnrichmentProvider(prisma, noCreds, 'org-1', stubPdl),
+    ).toBeNull();
+  });
+
+  it('builds a PdlEnrichmentProvider when PDL is connected', async () => {
+    const prisma = prismaWithKinds(new Set(['pdl']));
+    const credentials = {
+      load: async () => ({ apiKey: 'secret' }),
+    } as unknown as CredentialManager;
+
+    const provider = await buildEnrichmentProvider(
+      prisma,
+      credentials,
+      'org-1',
+      stubPdl,
+    );
+    expect(provider).toBeInstanceOf(PdlEnrichmentProvider);
+  });
+
+  it('builds on Cloud too — PDL is not self-host-gated', async () => {
+    const prisma = prismaWithKinds(new Set(['pdl']));
+    const credentials = {
+      load: async () => ({ apiKey: 'secret' }),
+    } as unknown as CredentialManager;
+
+    const provider = await buildEnrichmentProvider(
+      prisma,
+      credentials,
+      'org-1',
+      stubPdl,
+      'cloud',
+    );
+    expect(provider).toBeInstanceOf(PdlEnrichmentProvider);
+  });
+
+  it('returns null (not throw) on a benign credential error — enrichment is best-effort', async () => {
+    const prisma = prismaWithKinds(new Set(['pdl']));
+    const credentials = credentialsThatThrow(
+      new CredentialManagerError('circuit_broken', 'cooldown'),
+    );
+    expect(
+      await buildEnrichmentProvider(prisma, credentials, 'org-1', stubPdl),
+    ).toBeNull();
+  });
+
+  it('re-throws a non-credential error so the orchestrator can log + skip', async () => {
+    const prisma = prismaWithKinds(new Set(['pdl']));
+    const credentials = credentialsThatThrow(new Error('DB unreachable'));
+    await expect(
+      buildEnrichmentProvider(prisma, credentials, 'org-1', stubPdl),
+    ).rejects.toThrow(/DB unreachable/);
+  });
+});

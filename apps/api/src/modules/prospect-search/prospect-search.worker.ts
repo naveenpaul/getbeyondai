@@ -27,10 +27,16 @@ import {
   type SourcingProvider,
 } from '../connectors/sourcing/sourcing-provider';
 import type { WaterfallConnector } from '../connectors/sourcing/waterfall-sourcing.service';
+import type { CompanyEnrichmentProvider } from '../connectors/enrichment/enrichment-provider';
+import {
+  PdlEnrichmentProvider,
+  type PdlCompanyEnricher,
+} from '../connectors/enrichment/pdl-enrichment.provider';
 import { resolveOrgSourcingConfig } from '../connectors/sourcing/org-sourcing-config';
 import { apolloSourceAdapter } from '../connectors/adapters/apollo/apollo.source';
 import { snovSourceAdapter } from '../connectors/adapters/snov/snov.source';
 import { zoominfoSourceAdapter } from '../connectors/adapters/zoominfo/zoominfo.adapter';
+import { pdlSourceAdapter } from '../connectors/adapters/pdl/pdl.source';
 import {
   CredentialManager,
   CredentialManagerError,
@@ -38,6 +44,7 @@ import {
 } from '../connectors/credential-manager';
 import {
   isApolloAllowed,
+  isPdlAllowed,
   resolveDeploymentMode,
   type DeploymentMode,
 } from '../../common/deployment';
@@ -131,6 +138,8 @@ export class ProspectSearchWorker implements OnModuleInit {
                 orgId,
                 data.sourcing,
               ),
+            buildEnrichmentProvider: (orgId) =>
+              buildEnrichmentProvider(this.prisma, this.credentials, orgId),
             buildContactSourcers: (orgId) =>
               buildContactSourcers(
                 this.prisma,
@@ -250,6 +259,43 @@ export async function buildSourcingProvider(
     deploymentMode,
     false,
   );
+}
+
+/**
+ * Build the per-run company-enrichment provider (Stage 2.5), or null when the
+ * org hasn't connected PDL / it isn't usable. Mirrors {@link buildApolloProvider}
+ * but is purely best-effort: enrichment is never user-requested-by-name, so a
+ * benign problem (not connected, key rejected, circuit open, gated off) just
+ * returns null and the orchestrator skips enrichment — it never surfaces a
+ * `SourcingUnavailableError`. The PDL key is loaded + decrypted at the credential
+ * boundary (invariant #6). PDL is allowed in all modes today (`isPdlAllowed`);
+ * if its ToS later forces self-host-only, that one helper gates this too.
+ */
+export async function buildEnrichmentProvider(
+  prisma: PrismaService,
+  credentials: CredentialManager,
+  orgId: string,
+  // Injectable for tests; production uses the registered PDL adapter singleton.
+  pdlAdapter: PdlCompanyEnricher = pdlSourceAdapter,
+  // Defaults to the env-resolved mode; tests pass it explicitly.
+  deploymentMode: DeploymentMode = resolveDeploymentMode(),
+): Promise<CompanyEnrichmentProvider | null> {
+  if (!isPdlAllowed(deploymentMode)) return null;
+  const account = await prisma.connectorAccount.findUnique({
+    where: { orgId_kind: { orgId, kind: 'pdl' } },
+    select: { id: true },
+  });
+  if (!account) return null;
+  let creds;
+  try {
+    creds = await credentials.load(account.id);
+  } catch (err) {
+    // A benign credential problem (key rejected / circuit open) just means no
+    // enrichment this run — never fail the prospectSearch over it.
+    if (err instanceof CredentialManagerError) return null;
+    throw err;
+  }
+  return new PdlEnrichmentProvider(pdlAdapter, creds, account.id, credentials);
 }
 
 /**
