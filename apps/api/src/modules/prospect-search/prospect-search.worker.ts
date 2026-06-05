@@ -32,6 +32,7 @@ import {
   type PdlCompanySearcher,
 } from '../connectors/sourcing/pdl-sourcing.provider';
 import { canonicalCountry } from '../connectors/sourcing/geo';
+import { FallbackSourcingProvider } from '../connectors/sourcing/fallback-sourcing.provider';
 import type { WaterfallConnector } from '../connectors/sourcing/waterfall-sourcing.service';
 import type { CompanyEnrichmentProvider } from '../connectors/enrichment/enrichment-provider';
 import {
@@ -288,12 +289,17 @@ export async function buildSourcingProvider(
   // city-scoped goal needs a source with fine, global geo, so prefer PDL (global
   // city-level) and Apollo (global free-form) over ZoomInfo (US/Canada-only geo).
   // A country-level / geo-free goal keeps the cheaper-first order (ZoomInfo
-  // company search is free; PDL bills a credit per record). A provider that isn't
-  // connected / allowed contributes null and we try the next; a connected-but-
-  // broken one surfaces a graceful "reconnect …" SourcingUnavailableError.
+  // company search is free; PDL bills a credit per record).
+  //
+  // We build ALL connected/allowed providers in that order and wrap them in a
+  // FallbackSourcingProvider, so a runtime failure on the preferred one (PDL out
+  // of credits, an expired key, a tripped breaker) falls through to the next
+  // capable source instead of dead-ending the search. A provider that isn't
+  // connected/allowed contributes null and is simply omitted from the chain.
   const order: ReadonlyArray<'pdl' | 'zoominfo' | 'apollo'> = hasCityLocation(icp)
     ? ['pdl', 'apollo', 'zoominfo']
     : ['zoominfo', 'apollo', 'pdl'];
+  const chain: SourcingProvider[] = [];
   for (const kind of order) {
     const provider =
       kind === 'zoominfo'
@@ -322,9 +328,10 @@ export async function buildSourcingProvider(
               deploymentMode,
               false,
             );
-    if (provider) return provider;
+    if (provider) chain.push(provider);
   }
-  return null;
+  if (chain.length === 0) return null;
+  return chain.length === 1 ? chain[0]! : new FallbackSourcingProvider(chain);
 }
 
 /**
