@@ -24,8 +24,14 @@ import { ZoomInfoClient } from '../connectors/adapters/zoominfo/zoominfo.source'
 import type { DecryptedCredentials } from '@getbeyond/shared';
 import {
   SourcingUnavailableError,
+  type IcpCriteria,
   type SourcingProvider,
 } from '../connectors/sourcing/sourcing-provider';
+import {
+  PdlSourcingProvider,
+  type PdlCompanySearcher,
+} from '../connectors/sourcing/pdl-sourcing.provider';
+import { canonicalCountry } from '../connectors/sourcing/geo';
 import type { WaterfallConnector } from '../connectors/sourcing/waterfall-sourcing.service';
 import type { CompanyEnrichmentProvider } from '../connectors/enrichment/enrichment-provider';
 import {
@@ -131,12 +137,18 @@ export class ProspectSearchWorker implements OnModuleInit {
           const orchestrator = new ProspectSearchOrchestrator({
             prisma: this.prisma,
             llm: provider,
-            buildSourcingProvider: (orgId) =>
+            buildSourcingProvider: (orgId, icp) =>
               buildSourcingProvider(
                 this.prisma,
                 this.credentials,
                 orgId,
                 data.sourcing,
+                // Test-only injectables default to the registered adapters in
+                // prod; the derived ICP rides last so it can steer geo routing.
+                undefined,
+                undefined,
+                undefined,
+                icp,
               ),
             buildEnrichmentProvider: (orgId) =>
               buildEnrichmentProvider(this.prisma, this.credentials, orgId),
@@ -200,6 +212,25 @@ export class ProspectSearchWorker implements OnModuleInit {
  * rejected / circuit open) throws `SourcingUnavailableError`, which the
  * orchestrator surfaces gracefully rather than failing the prospectSearch.
  */
+/** An empty ICP — the routing default when a caller doesn't pass one. */
+const ICP_NONE: IcpCriteria = {
+  keywords: [],
+  employeeCountMin: null,
+  employeeCountMax: null,
+  fundingStages: [],
+  industries: [],
+  locations: [],
+};
+
+/** True when the ICP names a non-country location (a city/region) — the signal
+ * that we need a source with fine, global geo (PDL/Apollo), since ZoomInfo can
+ * only filter by country. */
+function hasCityLocation(icp: IcpCriteria): boolean {
+  return icp.locations.some(
+    (loc) => loc.trim().length > 0 && canonicalCountry(loc) === null,
+  );
+}
+
 export async function buildSourcingProvider(
   prisma: PrismaService,
   credentials: CredentialManager,
@@ -213,6 +244,11 @@ export async function buildSourcingProvider(
   zoomInfoSearcherFactory: (
     creds: DecryptedCredentials,
   ) => ZoomInfoCompanySearcher = defaultZoomInfoSearcherFactory,
+  // The derived ICP — steers auto-discovery routing (geo-aware). Defaults to an
+  // empty ICP (no city → the cheaper-first order, unchanged from before).
+  icp: IcpCriteria = ICP_NONE,
+  // Injectable for tests; production uses the registered PDL adapter singleton.
+  pdlAdapter: PdlCompanySearcher = pdlSourceAdapter,
 ): Promise<SourcingProvider | null> {
   if (sourcing?.provider === 'contact_list') {
     return new ContactListSourcingProvider(prisma, orgId, sourcing.listId);
@@ -237,28 +273,117 @@ export async function buildSourcingProvider(
       true,
     );
   }
+  if (sourcing?.provider === 'pdl') {
+    return buildPdlProvider(
+      prisma,
+      credentials,
+      orgId,
+      pdlAdapter,
+      deploymentMode,
+      true,
+    );
+  }
 
-  // Auto-discovery (no source attached): prefer ZoomInfo (the org's tested data
-  // service), then fall back to Apollo. A provider that isn't connected / allowed
-  // contributes null and we try the next; a connected-but-broken one surfaces a
-  // graceful "reconnect …" message via SourcingUnavailableError.
-  const viaZoomInfo = await buildZoomInfoProvider(
-    prisma,
-    credentials,
-    orgId,
-    deploymentMode,
-    zoomInfoSearcherFactory,
-    false,
-  );
-  if (viaZoomInfo) return viaZoomInfo;
-  return buildApolloProvider(
-    prisma,
-    credentials,
-    orgId,
-    apolloAdapter,
-    deploymentMode,
-    false,
-  );
+  // Auto-discovery (no source attached). Order by the ICP's geo needs: a
+  // city-scoped goal needs a source with fine, global geo, so prefer PDL (global
+  // city-level) and Apollo (global free-form) over ZoomInfo (US/Canada-only geo).
+  // A country-level / geo-free goal keeps the cheaper-first order (ZoomInfo
+  // company search is free; PDL bills a credit per record). A provider that isn't
+  // connected / allowed contributes null and we try the next; a connected-but-
+  // broken one surfaces a graceful "reconnect …" SourcingUnavailableError.
+  const order: ReadonlyArray<'pdl' | 'zoominfo' | 'apollo'> = hasCityLocation(icp)
+    ? ['pdl', 'apollo', 'zoominfo']
+    : ['zoominfo', 'apollo', 'pdl'];
+  for (const kind of order) {
+    const provider =
+      kind === 'zoominfo'
+        ? await buildZoomInfoProvider(
+            prisma,
+            credentials,
+            orgId,
+            deploymentMode,
+            zoomInfoSearcherFactory,
+            false,
+          )
+        : kind === 'apollo'
+          ? await buildApolloProvider(
+              prisma,
+              credentials,
+              orgId,
+              apolloAdapter,
+              deploymentMode,
+              false,
+            )
+          : await buildPdlProvider(
+              prisma,
+              credentials,
+              orgId,
+              pdlAdapter,
+              deploymentMode,
+              false,
+            );
+    if (provider) return provider;
+  }
+  return null;
+}
+
+/**
+ * Build the PDL discovery provider, or null when it can't participate. Same
+ * `explicit` semantics as {@link buildApolloProvider}. PDL is allowed in all
+ * deployment modes today (`isPdlAllowed`); its key is loaded + decrypted at the
+ * credential boundary (invariant #6).
+ */
+async function buildPdlProvider(
+  prisma: PrismaService,
+  credentials: CredentialManager,
+  orgId: string,
+  pdlAdapter: PdlCompanySearcher,
+  deploymentMode: DeploymentMode,
+  explicit: boolean,
+): Promise<SourcingProvider | null> {
+  if (!isPdlAllowed(deploymentMode)) {
+    if (explicit) {
+      throw new SourcingUnavailableError(
+        'PDL discovery is not available on this deployment.',
+      );
+    }
+    return null;
+  }
+  const account = await prisma.connectorAccount.findUnique({
+    where: { orgId_kind: { orgId, kind: 'pdl' } },
+    select: { id: true },
+  });
+  if (!account) {
+    if (explicit) {
+      throw new SourcingUnavailableError(
+        'Connect PDL to discover companies matching your ICP.',
+      );
+    }
+    return null;
+  }
+  let creds;
+  try {
+    creds = await credentials.load(account.id);
+  } catch (err) {
+    if (err instanceof CredentialManagerError) {
+      if (explicit) throw new SourcingUnavailableError(pdlUnavailableMessage(err.code));
+      return null;
+    }
+    throw err;
+  }
+  return new PdlSourcingProvider(pdlAdapter, creds, account.id, credentials);
+}
+
+/** Map a PDL credential-load failure to an action-oriented user message. */
+function pdlUnavailableMessage(code: CredentialManagerErrorCode): string {
+  switch (code) {
+    case 'expired':
+      return 'Your PDL key was rejected — reconnect PDL to keep discovering companies.';
+    case 'circuit_broken':
+      return 'PDL is temporarily unavailable (too many recent errors). Try again shortly.';
+    default:
+      return 'PDL isn’t connected. Connect PDL to discover companies.';
+  }
 }
 
 /**

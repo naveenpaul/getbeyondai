@@ -192,7 +192,10 @@ export interface ProspectSearchOrchestratorDeps {
    * `SourcingUnavailableError` for benign, user-fixable problems (Apollo not
    * connected / key rejected) — the orchestrator surfaces those gracefully.
    */
-  buildSourcingProvider: (orgId: string) => Promise<SourcingProvider | null>;
+  buildSourcingProvider: (
+    orgId: string,
+    icp: IcpCriteria,
+  ) => Promise<SourcingProvider | null>;
   /**
    * Builds the per-run company-enrichment provider (Stage 2.5), or null when the
    * org hasn't connected one. The worker loads + decrypts the PDL key; tests
@@ -308,7 +311,10 @@ export class ProspectSearchOrchestrator {
       // ── 2. Source prospect pool (optional) ─────────────────────────
       let provider: SourcingProvider | null;
       try {
-        provider = await this.deps.buildSourcingProvider(input.orgId);
+        // Pass the derived ICP so the builder can route to the source whose geo
+        // coverage fits (e.g. a city-scoped goal → PDL, which does global city
+        // geo, over ZoomInfo, whose geo filters are US/Canada-only).
+        provider = await this.deps.buildSourcingProvider(input.orgId, derived.icp);
       } catch (err) {
         // A benign, user-fixable sourcing problem (Apollo not connected / key
         // rejected) — surface the actionable message and complete gracefully

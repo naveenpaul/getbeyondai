@@ -8,6 +8,11 @@ import { ApolloSourcingProvider } from '../connectors/sourcing/apollo-sourcing.p
 import { ZoomInfoSourcingProvider } from '../connectors/sourcing/zoominfo-sourcing.provider';
 import { ContactListSourcingProvider } from '../connectors/sourcing/contact-list-sourcing.provider';
 import { SourcingUnavailableError } from '../connectors/sourcing/sourcing-provider';
+import type { IcpCriteria } from '../connectors/sourcing/sourcing-provider';
+import {
+  PdlSourcingProvider,
+  type PdlCompanySearcher,
+} from '../connectors/sourcing/pdl-sourcing.provider';
 import { PdlEnrichmentProvider } from '../connectors/enrichment/pdl-enrichment.provider';
 import type { PdlCompanyEnricher } from '../connectors/enrichment/pdl-enrichment.provider';
 import {
@@ -385,6 +390,72 @@ function credentialsThatThrow(err: Error): CredentialManager {
     },
   } as unknown as CredentialManager;
 }
+
+describe('buildSourcingProvider — PDL + geo-aware routing', () => {
+  const creds = {
+    load: async () => ({ apiKey: 'secret', clientId: 'id', clientSecret: 'sec' }),
+  } as unknown as CredentialManager;
+  const fakePdl: PdlCompanySearcher = {
+    searchCompanies: async () => ({ total: 0, records: [] }),
+  };
+  const fakeZi = (): { searchCompanies: () => Promise<{ data: never[] }> } => ({
+    searchCompanies: async () => ({ data: [] }),
+  });
+  const icp = (locations: string[]): IcpCriteria => ({
+    keywords: [],
+    employeeCountMin: null,
+    employeeCountMax: null,
+    fundingStages: [],
+    industries: [],
+    locations,
+  });
+
+  it('builds a PdlSourcingProvider for an explicit pdl source', async () => {
+    const prisma = prismaWithKinds(new Set(['pdl']));
+    const provider = await buildSourcingProvider(
+      prisma, creds, 'org-1', { provider: 'pdl' },
+      undefined, undefined, undefined, icp([]), fakePdl,
+    );
+    expect(provider).toBeInstanceOf(PdlSourcingProvider);
+  });
+
+  it('throws a user-fixable error when explicit PDL is not connected', async () => {
+    const prisma = prismaWithKinds(new Set());
+    await expect(
+      buildSourcingProvider(
+        prisma, noCreds, 'org-1', { provider: 'pdl' },
+        undefined, undefined, undefined, icp([]), fakePdl,
+      ),
+    ).rejects.toBeInstanceOf(SourcingUnavailableError);
+  });
+
+  it('auto-discovery prefers PDL for a city-scoped ICP, even when ZoomInfo is connected', async () => {
+    const prisma = prismaWithKinds(new Set(['zoominfo', 'pdl']));
+    const provider = await buildSourcingProvider(
+      prisma, creds, 'org-1', null,
+      undefined, undefined, fakeZi, icp(['Bengaluru']), fakePdl,
+    );
+    expect(provider).toBeInstanceOf(PdlSourcingProvider);
+  });
+
+  it('auto-discovery prefers ZoomInfo for a country-level ICP (cheaper-first)', async () => {
+    const prisma = prismaWithKinds(new Set(['zoominfo', 'pdl']));
+    const provider = await buildSourcingProvider(
+      prisma, creds, 'org-1', null,
+      undefined, undefined, fakeZi, icp(['India']), fakePdl,
+    );
+    expect(provider).toBeInstanceOf(ZoomInfoSourcingProvider);
+  });
+
+  it('falls back to PDL in auto-discovery when it is the only source connected', async () => {
+    const prisma = prismaWithKinds(new Set(['pdl']));
+    const provider = await buildSourcingProvider(
+      prisma, creds, 'org-1', null,
+      undefined, undefined, fakeZi, icp(['India']), fakePdl,
+    );
+    expect(provider).toBeInstanceOf(PdlSourcingProvider);
+  });
+});
 
 describe('buildEnrichmentProvider', () => {
   const stubPdl: PdlCompanyEnricher = { enrichCompany: async () => null };

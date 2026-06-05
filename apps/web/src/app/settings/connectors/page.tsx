@@ -125,12 +125,13 @@ export default function ConnectorsSettingsPage(): React.JSX.Element {
 
       <section className="space-y-4">
         <div className="space-y-1">
-          <h2 className="text-lg font-semibold tracking-tight">Enrichment</h2>
+          <h2 className="text-lg font-semibold tracking-tight">
+            Global discovery & enrichment
+          </h2>
           <p className="text-sm text-muted-foreground">
-            Fill in firmographics (headcount, domain, industry) on sourced
-            companies before they’re qualified — so research and fit-scoring work
-            from real data, not guesses. Especially useful when your source is an
-            imported list.
+            PDL discovers companies worldwide with city-level targeting (UK,
+            Europe, Asia — geography ZoomInfo can’t filter on), and fills in
+            firmographics on sourced companies before they’re qualified.
           </p>
         </div>
 
@@ -138,9 +139,9 @@ export default function ConnectorsSettingsPage(): React.JSX.Element {
           title="People Data Labs"
           keyLabel="PDL API key"
           unavailableBadgeLabel="Unavailable"
-          unavailableHelp="PDL enrichment isn’t available on this deployment."
-          connectedHelp="A key is configured. New searches enrich sourced companies with PDL firmographics before qualification. Paste a new key to replace it."
-          unconnectedHelp="Add your PDL API key to enrich sourced companies (headcount, domain, industry) before qualification. Find it in PDL under Settings → API Keys."
+          unavailableHelp="PDL isn’t available on this deployment."
+          connectedHelp="A key is configured. PDL powers global, city-level company discovery and firmographic enrichment for new searches. Paste a new key to replace it."
+          unconnectedHelp="Add your PDL API key for worldwide, city-level company discovery (e.g. “startups in Bengaluru / London / Berlin”) and firmographic enrichment. Find it in PDL under Settings → API Keys."
           status={pdlStatus}
           onConnect={connectPdl}
           onConnected={() => void load()}

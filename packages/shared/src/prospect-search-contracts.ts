@@ -29,7 +29,8 @@ export type ProspectSearchStatus = 'draft' | 'running' | 'completed' | 'failed';
 export type SourcingConfig =
   | { provider: 'contact_list'; listId: string }
   | { provider: 'apollo' }
-  | { provider: 'zoominfo' };
+  | { provider: 'zoominfo' }
+  | { provider: 'pdl' };
 
 // ─── Explicit ICP criteria (user-supplied overrides) ────────────────
 //

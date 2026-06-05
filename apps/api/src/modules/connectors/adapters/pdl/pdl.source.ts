@@ -42,9 +42,43 @@ const DEFAULT_MIN_LIKELIHOOD = 6;
 /** A name that cannot match any real company — used by `ping` for a zero-credit key check. */
 const PING_SENTINEL_NAME = '__getbeyond_pdl_ping__';
 
+/** Raised on 401/403 — the PDL key was rejected. No retry self-heals a bad key. */
+export class PdlAuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PdlAuthError';
+  }
+}
+
+/** Raised on 402 — the PDL account is out of search credits. User-fixable (top up). */
+export class PdlInsufficientCreditsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PdlInsufficientCreditsError';
+  }
+}
+
 /** Credentials envelope this adapter persists + consumes. */
 export interface PdlCredentials {
   apiKey: string;
+}
+
+/** Inputs + breaker hooks for one Company Search (discovery) call. */
+export interface PdlCompanySearchParams {
+  creds: DecryptedCredentials;
+  /** Elasticsearch query object passed as PDL's `query`. */
+  query: Record<string, unknown>;
+  /** Records to return (1–100). Each returned record bills one PDL credit. */
+  size: number;
+  onVendorFailure?: (kind: 'server_5xx' | 'auth_invalid') => Promise<void>;
+  onVendorSuccess?: () => void;
+}
+
+export interface PdlCompanySearchResponse {
+  /** Total companies matching the query (independent of `size`). */
+  total: number;
+  /** Up to `size` raw PDL company records (the provider maps them to candidates). */
+  records: Array<Record<string, unknown>>;
 }
 
 /** Identity inputs + breaker hooks for one company enrichment lookup. */
@@ -198,6 +232,96 @@ export class PdlSourceAdapter {
     // A successful page clears the breaker's failure window.
     params.onVendorSuccess?.();
     return toPdlCompanyRecord(json as PdlCompanyResponse);
+  }
+
+  /**
+   * Run a PDL Company Search (discovery): POST /v5/company/search with an
+   * Elasticsearch `query`. PDL's data is global with native city-level geo, so
+   * this is the source we reach for on non-US/Canada and city-scoped goals.
+   *
+   * A 404 means "no company matched" — a valid empty result, NOT a fault (PDL
+   * signals zero-hits that way). 401/403 → PdlAuthError, 402 (no credits) →
+   * PdlInsufficientCreditsError — both user-fixable, so the sourcing provider
+   * converts them to a graceful "reconnect / top up" outcome; 5xx is transient.
+   * COST: bills one credit per returned record (so `size` == credits spent).
+   */
+  async searchCompanies(
+    params: PdlCompanySearchParams,
+  ): Promise<PdlCompanySearchResponse> {
+    const apiKey = decodePdlCreds(params.creds).apiKey;
+
+    let response: Response;
+    try {
+      response = await this.postJson(apiKey, '/v5/company/search', {
+        query: params.query,
+        size: params.size,
+      });
+    } catch (err) {
+      await params.onVendorFailure?.('server_5xx');
+      throw new Error(`PDL search request failed: ${describeError(err)}`);
+    }
+
+    if (response.status === 404) {
+      // Zero matches — a valid empty result, not a failure.
+      params.onVendorSuccess?.();
+      return { total: 0, records: [] };
+    }
+    if (response.status === 401 || response.status === 403) {
+      await params.onVendorFailure?.('auth_invalid');
+      throw new PdlAuthError(`PDL rejected the API key (HTTP ${response.status})`);
+    }
+    if (response.status === 402) {
+      throw new PdlInsufficientCreditsError(
+        'PDL is out of search credits (HTTP 402)',
+      );
+    }
+    if (response.status >= 500) {
+      await params.onVendorFailure?.('server_5xx');
+      throw new Error(`PDL server error (HTTP ${response.status})`);
+    }
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(
+        `PDL HTTP ${response.status}` + (text ? `: ${text.slice(0, 200)}` : ''),
+      );
+    }
+
+    let json: { data?: unknown; total?: unknown };
+    try {
+      json = (await response.json()) as { data?: unknown; total?: unknown };
+    } catch (err) {
+      throw new Error(`PDL returned a non-JSON response: ${describeError(err)}`);
+    }
+    params.onVendorSuccess?.();
+    const records = Array.isArray(json.data)
+      ? (json.data as Array<Record<string, unknown>>)
+      : [];
+    const total = typeof json.total === 'number' ? json.total : records.length;
+    return { total, records };
+  }
+
+  /** Issue a JSON POST with the key in the X-Api-Key header + a timeout. */
+  private async postJson(
+    apiKey: string,
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      return await this.httpFetch(`${this.baseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-Api-Key': apiKey,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Issue the enrichment GET with the key in the X-Api-Key header + a timeout. */

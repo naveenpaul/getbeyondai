@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DecryptedCredentials } from '@getbeyond/shared';
 import {
+  PdlAuthError,
+  PdlInsufficientCreditsError,
   PdlSourceAdapter,
   pdlSourceAdapter,
   type PdlCompanyEnrichParams,
+  type PdlCompanySearchParams,
 } from './pdl.source';
 
 function jsonResponse(body: unknown, init: { status?: number } = {}): Response {
@@ -45,6 +48,20 @@ function enrichParams(
     creds: CREDS,
     name: 'Acme Inc',
     domain: null,
+    onVendorFailure: vi.fn(async () => {}),
+    onVendorSuccess: vi.fn(),
+    ...overrides,
+  };
+}
+
+/** Build searchCompanies params with spy hooks. */
+function searchParams(
+  overrides: Partial<PdlCompanySearchParams> = {},
+): PdlCompanySearchParams {
+  return {
+    creds: CREDS,
+    query: { term: { 'location.locality': 'bangalore' } },
+    size: 25,
     onVendorFailure: vi.fn(async () => {}),
     onVendorSuccess: vi.fn(),
     ...overrides,
@@ -261,5 +278,92 @@ describe('PdlSourceAdapter — enrichCompany', () => {
     const adapter = new PdlSourceAdapter({ httpFetch });
     const record = await adapter.enrichCompany(enrichParams());
     expect(record?.linkedinUrl).toBe('https://www.linkedin.com/company/x');
+  });
+});
+
+describe('PdlSourceAdapter — searchCompanies', () => {
+  it('returns total + records and POSTs the query and size', async () => {
+    const httpFetch = fetchReturning(() =>
+      jsonResponse({
+        status: 200,
+        total: 57802,
+        data: [{ name: 'timetraverse' }, { name: 'acme' }],
+      }),
+    );
+    const adapter = new PdlSourceAdapter({ httpFetch });
+    const params = searchParams();
+    const res = await adapter.searchCompanies(params);
+    expect(res).toEqual({
+      total: 57802,
+      records: [{ name: 'timetraverse' }, { name: 'acme' }],
+    });
+    // POST /v5/company/search with { query, size } in the body.
+    const [url, init] = httpFetch.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toContain('/v5/company/search');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({
+      query: { term: { 'location.locality': 'bangalore' } },
+      size: 25,
+    });
+    expect(params.onVendorSuccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a 404 as an empty result, not a failure', async () => {
+    const httpFetch = fetchReturning(() =>
+      jsonResponse({ status: 404 }, { status: 404 }),
+    );
+    const adapter = new PdlSourceAdapter({ httpFetch });
+    const params = searchParams();
+    const res = await adapter.searchCompanies(params);
+    expect(res).toEqual({ total: 0, records: [] });
+    expect(params.onVendorSuccess).toHaveBeenCalledTimes(1);
+    expect(params.onVendorFailure).not.toHaveBeenCalled();
+  });
+
+  it('throws PdlAuthError + signals the breaker on a rejected key (401)', async () => {
+    const httpFetch = fetchReturning(() => jsonResponse({}, { status: 401 }));
+    const adapter = new PdlSourceAdapter({ httpFetch });
+    const params = searchParams();
+    await expect(adapter.searchCompanies(params)).rejects.toBeInstanceOf(PdlAuthError);
+    expect(params.onVendorFailure).toHaveBeenCalledWith('auth_invalid');
+  });
+
+  it('throws PdlInsufficientCreditsError on a 402 (no breaker — not a vendor fault)', async () => {
+    const httpFetch = fetchReturning(() => jsonResponse({}, { status: 402 }));
+    const adapter = new PdlSourceAdapter({ httpFetch });
+    const params = searchParams();
+    await expect(adapter.searchCompanies(params)).rejects.toBeInstanceOf(
+      PdlInsufficientCreditsError,
+    );
+    expect(params.onVendorFailure).not.toHaveBeenCalled();
+  });
+
+  it('signals the breaker and throws on a 503', async () => {
+    const httpFetch = fetchReturning(() => jsonResponse({}, { status: 503 }));
+    const adapter = new PdlSourceAdapter({ httpFetch });
+    const params = searchParams();
+    await expect(adapter.searchCompanies(params)).rejects.toThrow(/503/);
+    expect(params.onVendorFailure).toHaveBeenCalledWith('server_5xx');
+  });
+
+  it('feeds the breaker a 5xx and throws on a transport failure', async () => {
+    const httpFetch = vi.fn(async () => {
+      throw new Error('socket hang up');
+    });
+    const adapter = new PdlSourceAdapter({ httpFetch });
+    const params = searchParams();
+    await expect(adapter.searchCompanies(params)).rejects.toThrow(
+      /PDL search request failed/,
+    );
+    expect(params.onVendorFailure).toHaveBeenCalledWith('server_5xx');
+  });
+
+  it('falls back to records.length when total is absent', async () => {
+    const httpFetch = fetchReturning(() =>
+      jsonResponse({ status: 200, data: [{ name: 'a' }] }),
+    );
+    const adapter = new PdlSourceAdapter({ httpFetch });
+    const res = await adapter.searchCompanies(searchParams());
+    expect(res.total).toBe(1);
   });
 });
