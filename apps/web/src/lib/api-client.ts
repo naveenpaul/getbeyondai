@@ -334,6 +334,36 @@ export async function connectApollo(
   return res.json() as Promise<{ id: string; status: 'connected' }>;
 }
 
+export interface PdlAccountStatus {
+  /** Today always true (PDL is allowed in all modes); false would hide the card. */
+  available: boolean;
+  connected: boolean;
+  status?: string;
+}
+
+/** Current PDL (People Data Labs) connection state for the org. */
+export async function getPdlStatus(): Promise<PdlAccountStatus> {
+  const res = await fetch(`${env.apiUrl}/connectors/pdl/account`, {
+    credentials: 'include',
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<PdlAccountStatus>;
+}
+
+/** Validate + persist a PDL BYO API key. Throws ApiError(400) on a bad key. */
+export async function connectPdl(
+  apiKey: string,
+): Promise<{ id: string; status: 'connected' }> {
+  const res = await fetch(`${env.apiUrl}/connectors/pdl/account`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ apiKey }),
+    credentials: 'include',
+  });
+  if (!res.ok) await readError(res);
+  return res.json() as Promise<{ id: string; status: 'connected' }>;
+}
+
 export interface SnovAccountStatus {
   connected: boolean;
   status?: string;

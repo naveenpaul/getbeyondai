@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   ZoomInfoAuthError,
+  ZoomInfoBadRequestError,
   ZoomInfoServerError,
   type ZoomInfoCompanySearchAttributes,
   type ZoomInfoDocument,
@@ -140,6 +141,26 @@ describe('ZoomInfoSourcingProvider.findCandidates', () => {
     expect(health.failures).toEqual([{ accountId: 'acct-1', kind: 'auth_invalid' }]);
   });
 
+  it('maps a 400 bad-criteria error to a graceful SourcingUnavailableError', async () => {
+    const health = fakeHealth();
+    const searcher: ZoomInfoCompanySearcher = {
+      searchCompanies: async () => {
+        throw new ZoomInfoBadRequestError(
+          'ZoomInfo rejected the search criteria (HTTP 400)',
+        );
+      },
+    };
+    const provider = new ZoomInfoSourcingProvider(searcher, 'acct-1', health);
+    // Graceful: a non-retryable criteria error completes the search (ICP shown)
+    // rather than dumping the raw vendor error as search_failed.
+    await expect(provider.findCandidates(EMPTY_ICP)).rejects.toBeInstanceOf(
+      SourcingUnavailableError,
+    );
+    await expect(provider.findCandidates(EMPTY_ICP)).rejects.toThrow(
+      /filters by country, not city/i,
+    );
+  });
+
   it('reports a server error and rethrows it (transient, NOT graceful)', async () => {
     const health = fakeHealth();
     const searcher: ZoomInfoCompanySearcher = {
@@ -201,6 +222,44 @@ describe('icpToZoomInfoCompanyCriteria (verified live 2026-06-04)', () => {
     expect(attrs['companyDescription']).toBe('devtools API Fintech');
     // fundingStages have no ZoomInfo filter — not emitted.
     expect(attrs).not.toHaveProperty('fundingStage');
+  });
+
+  it('routes a non-country location (a city) to the description, NOT country', () => {
+    // The "find … startups in Bengaluru" regression: a city in `country` 400s.
+    const attrs = icpToZoomInfoCompanyCriteria({
+      ...EMPTY_ICP,
+      keywords: ['IT', 'startup'],
+      locations: ['Bengaluru'],
+    });
+    expect(attrs).not.toHaveProperty('country');
+    expect(attrs['companyDescription']).toBe('IT startup Bengaluru');
+  });
+
+  it('splits mixed locations: countries → country, the rest → description', () => {
+    const attrs = icpToZoomInfoCompanyCriteria({
+      ...EMPTY_ICP,
+      keywords: ['fintech'],
+      locations: ['United States', 'Bengaluru', 'California'],
+    });
+    expect(attrs['country']).toBe('United States');
+    expect(attrs['companyDescription']).toBe('fintech Bengaluru California');
+  });
+
+  it('normalizes common country aliases (US, UK) to canonical names', () => {
+    const attrs = icpToZoomInfoCompanyCriteria({
+      ...EMPTY_ICP,
+      locations: ['US', 'uk'],
+    });
+    expect(attrs['country']).toBe('United States,United Kingdom');
+  });
+
+  it('omits country entirely when no location is a recognized country', () => {
+    const attrs = icpToZoomInfoCompanyCriteria({
+      ...EMPTY_ICP,
+      locations: ['Bengaluru', 'Mumbai'],
+    });
+    expect(attrs).not.toHaveProperty('country');
+    expect(attrs['companyDescription']).toBe('Bengaluru Mumbai');
   });
 });
 

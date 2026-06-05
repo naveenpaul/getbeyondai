@@ -637,6 +637,7 @@ enum ConnectorKind {
   zoominfo
   snov
   csv
+  pdl
 }
 
 enum AuthMode {

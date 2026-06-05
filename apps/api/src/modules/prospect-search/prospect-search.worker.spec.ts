@@ -8,7 +8,18 @@ import { ApolloSourcingProvider } from '../connectors/sourcing/apollo-sourcing.p
 import { ZoomInfoSourcingProvider } from '../connectors/sourcing/zoominfo-sourcing.provider';
 import { ContactListSourcingProvider } from '../connectors/sourcing/contact-list-sourcing.provider';
 import { SourcingUnavailableError } from '../connectors/sourcing/sourcing-provider';
-import { buildContactSourcers, buildSourcingProvider } from './prospect-search.worker';
+import type { IcpCriteria } from '../connectors/sourcing/sourcing-provider';
+import {
+  PdlSourcingProvider,
+  type PdlCompanySearcher,
+} from '../connectors/sourcing/pdl-sourcing.provider';
+import { PdlEnrichmentProvider } from '../connectors/enrichment/pdl-enrichment.provider';
+import type { PdlCompanyEnricher } from '../connectors/enrichment/pdl-enrichment.provider';
+import {
+  buildContactSourcers,
+  buildEnrichmentProvider,
+  buildSourcingProvider,
+} from './prospect-search.worker';
 
 /**
  * Unit tests for the worker's `buildSourcingProvider` factory. The worker class
@@ -379,3 +390,129 @@ function credentialsThatThrow(err: Error): CredentialManager {
     },
   } as unknown as CredentialManager;
 }
+
+describe('buildSourcingProvider — PDL + geo-aware routing', () => {
+  const creds = {
+    load: async () => ({ apiKey: 'secret', clientId: 'id', clientSecret: 'sec' }),
+  } as unknown as CredentialManager;
+  const fakePdl: PdlCompanySearcher = {
+    searchCompanies: async () => ({ total: 0, records: [] }),
+  };
+  const fakeZi = (): { searchCompanies: () => Promise<{ data: never[] }> } => ({
+    searchCompanies: async () => ({ data: [] }),
+  });
+  const icp = (locations: string[]): IcpCriteria => ({
+    keywords: [],
+    employeeCountMin: null,
+    employeeCountMax: null,
+    fundingStages: [],
+    industries: [],
+    locations,
+  });
+
+  it('builds a PdlSourcingProvider for an explicit pdl source', async () => {
+    const prisma = prismaWithKinds(new Set(['pdl']));
+    const provider = await buildSourcingProvider(
+      prisma, creds, 'org-1', { provider: 'pdl' },
+      undefined, undefined, undefined, icp([]), fakePdl,
+    );
+    expect(provider).toBeInstanceOf(PdlSourcingProvider);
+  });
+
+  it('throws a user-fixable error when explicit PDL is not connected', async () => {
+    const prisma = prismaWithKinds(new Set());
+    await expect(
+      buildSourcingProvider(
+        prisma, noCreds, 'org-1', { provider: 'pdl' },
+        undefined, undefined, undefined, icp([]), fakePdl,
+      ),
+    ).rejects.toBeInstanceOf(SourcingUnavailableError);
+  });
+
+  it('auto-discovery prefers PDL for a city-scoped ICP, even when ZoomInfo is connected', async () => {
+    const prisma = prismaWithKinds(new Set(['zoominfo', 'pdl']));
+    const provider = await buildSourcingProvider(
+      prisma, creds, 'org-1', null,
+      undefined, undefined, fakeZi, icp(['Bengaluru']), fakePdl,
+    );
+    expect(provider).toBeInstanceOf(PdlSourcingProvider);
+  });
+
+  it('auto-discovery prefers ZoomInfo for a country-level ICP (cheaper-first)', async () => {
+    const prisma = prismaWithKinds(new Set(['zoominfo', 'pdl']));
+    const provider = await buildSourcingProvider(
+      prisma, creds, 'org-1', null,
+      undefined, undefined, fakeZi, icp(['India']), fakePdl,
+    );
+    expect(provider).toBeInstanceOf(ZoomInfoSourcingProvider);
+  });
+
+  it('falls back to PDL in auto-discovery when it is the only source connected', async () => {
+    const prisma = prismaWithKinds(new Set(['pdl']));
+    const provider = await buildSourcingProvider(
+      prisma, creds, 'org-1', null,
+      undefined, undefined, fakeZi, icp(['India']), fakePdl,
+    );
+    expect(provider).toBeInstanceOf(PdlSourcingProvider);
+  });
+});
+
+describe('buildEnrichmentProvider', () => {
+  const stubPdl: PdlCompanyEnricher = { enrichCompany: async () => null };
+
+  it('returns null when PDL is not connected', async () => {
+    const prisma = prismaWithKinds(new Set());
+    expect(
+      await buildEnrichmentProvider(prisma, noCreds, 'org-1', stubPdl),
+    ).toBeNull();
+  });
+
+  it('builds a PdlEnrichmentProvider when PDL is connected', async () => {
+    const prisma = prismaWithKinds(new Set(['pdl']));
+    const credentials = {
+      load: async () => ({ apiKey: 'secret' }),
+    } as unknown as CredentialManager;
+
+    const provider = await buildEnrichmentProvider(
+      prisma,
+      credentials,
+      'org-1',
+      stubPdl,
+    );
+    expect(provider).toBeInstanceOf(PdlEnrichmentProvider);
+  });
+
+  it('builds on Cloud too — PDL is not self-host-gated', async () => {
+    const prisma = prismaWithKinds(new Set(['pdl']));
+    const credentials = {
+      load: async () => ({ apiKey: 'secret' }),
+    } as unknown as CredentialManager;
+
+    const provider = await buildEnrichmentProvider(
+      prisma,
+      credentials,
+      'org-1',
+      stubPdl,
+      'cloud',
+    );
+    expect(provider).toBeInstanceOf(PdlEnrichmentProvider);
+  });
+
+  it('returns null (not throw) on a benign credential error — enrichment is best-effort', async () => {
+    const prisma = prismaWithKinds(new Set(['pdl']));
+    const credentials = credentialsThatThrow(
+      new CredentialManagerError('circuit_broken', 'cooldown'),
+    );
+    expect(
+      await buildEnrichmentProvider(prisma, credentials, 'org-1', stubPdl),
+    ).toBeNull();
+  });
+
+  it('re-throws a non-credential error so the orchestrator can log + skip', async () => {
+    const prisma = prismaWithKinds(new Set(['pdl']));
+    const credentials = credentialsThatThrow(new Error('DB unreachable'));
+    await expect(
+      buildEnrichmentProvider(prisma, credentials, 'org-1', stubPdl),
+    ).rejects.toThrow(/DB unreachable/);
+  });
+});

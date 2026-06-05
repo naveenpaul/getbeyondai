@@ -27,7 +27,8 @@ export type ConnectorKind =
   | 'apollo'
   | 'zoominfo'
   | 'snov'
-  | 'csv';
+  | 'csv'
+  | 'pdl';
 
 export type AuthMode = 'oauth' | 'byo_key' | 'upload';
 

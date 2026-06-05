@@ -19,6 +19,7 @@ import {
   type SourcingProvider,
   type SourcingResult,
 } from '../connectors/sourcing/sourcing-provider';
+import type { CompanyEnrichmentProvider } from '../connectors/enrichment/enrichment-provider';
 import type {
   runResearch,
   ResearchResult,
@@ -365,6 +366,158 @@ describe('ProspectSearchOrchestrator', () => {
         id: 'camp-1',
         status: 'completed',
       });
+    });
+  });
+
+  describe('run() Stage 2.5 enrichment', () => {
+    /** A fake enrichment provider whose enrich() runs `fn` per candidate. */
+    function enrichmentProvider(
+      fn: (c: CandidateCompany) => Promise<CandidateCompany>,
+    ): CompanyEnrichmentProvider {
+      return { name: 'pdl', enrich: vi.fn(fn) };
+    }
+
+    /** Standard ICP-then-score LLM responder + a single-draft prisma. */
+    function baseDeps(): {
+      prisma: ReturnType<typeof makeFakePrisma>;
+      llm: ReturnType<typeof makeFakeLlm>;
+    } {
+      const prisma = makeFakePrisma({ drafts: { d1: { content: {}, claims: [] } } });
+      const llm = makeFakeLlm((i) =>
+        i === 0 ? { text: icpJson() } : { text: SCORE_JSON },
+      );
+      return { prisma, llm };
+    }
+
+    it('enriches the pool before qualifying — the backfilled domain reaches the Researcher', async () => {
+      const { prisma, llm } = baseDeps();
+      const provider = makeSourcingProvider([prospect('Acme', null)]);
+      const targets: string[] = [];
+      const research = makeRunResearch((target) => {
+        targets.push(target);
+        return researchCompleted('d1');
+      });
+
+      const orchestrator = new ProspectSearchOrchestrator({
+        prisma,
+        llm,
+        buildSourcingProvider: async () => provider,
+        // Backfill the null domain Acme came in with.
+        buildEnrichmentProvider: async () =>
+          enrichmentProvider(async (c) => ({ ...c, domain: 'acme.com' })),
+        emitEvent,
+        runResearch: research,
+      });
+
+      const result = await orchestrator.run({
+        prospectSearchId: 'camp-1',
+        orgId: 'org-1',
+        triggeredBy: 'user-1',
+        goal: 'Find lookalikes',
+        winsListId: null,
+        concurrency: 1,
+        budgetCents: 1000,
+      });
+
+      expect(result.status).toBe('completed');
+      // The Researcher was given the enriched "Acme (acme.com)", not bare "Acme".
+      expect(targets).toEqual(['Acme (acme.com)']);
+    });
+
+    it('is a no-op when no enrichment provider is wired (regression-safe)', async () => {
+      const { prisma, llm } = baseDeps();
+      const provider = makeSourcingProvider([prospect('Acme', null)]);
+      const targets: string[] = [];
+      const research = makeRunResearch((target) => {
+        targets.push(target);
+        return researchCompleted('d1');
+      });
+
+      const orchestrator = new ProspectSearchOrchestrator({
+        prisma,
+        llm,
+        buildSourcingProvider: async () => provider,
+        // buildEnrichmentProvider intentionally absent.
+        emitEvent,
+        runResearch: research,
+      });
+
+      const result = await orchestrator.run({
+        prospectSearchId: 'camp-1',
+        orgId: 'org-1',
+        triggeredBy: 'user-1',
+        goal: 'Find lookalikes',
+        winsListId: null,
+        concurrency: 1,
+        budgetCents: 1000,
+      });
+
+      expect(result.status).toBe('completed');
+      expect(targets).toEqual(['Acme']);
+    });
+
+    it('stops enriching on the first vendor fault but still completes the search', async () => {
+      const { prisma, llm } = baseDeps();
+      const provider = makeSourcingProvider([prospect('Acme'), prospect('Beta')]);
+      const enrich = vi.fn(async () => {
+        throw new Error('PDL rejected the API key (HTTP 401)');
+      });
+      const research = makeRunResearch(() => researchCompleted('d1'));
+
+      const orchestrator = new ProspectSearchOrchestrator({
+        prisma,
+        llm,
+        buildSourcingProvider: async () => provider,
+        buildEnrichmentProvider: async () => ({ name: 'pdl', enrich }),
+        emitEvent,
+        runResearch: research,
+      });
+
+      const result = await orchestrator.run({
+        prospectSearchId: 'camp-1',
+        orgId: 'org-1',
+        triggeredBy: 'user-1',
+        goal: 'Find lookalikes',
+        winsListId: null,
+        concurrency: 1,
+        budgetCents: 1000,
+      });
+
+      // Both companies still qualified (unenriched); the pass aborted after the
+      // first throw rather than hammering the dead key across the whole pool.
+      expect(result.status).toBe('completed');
+      expect(result.prospectCount).toBe(2);
+      expect(enrich).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips enrichment when the provider build throws (never fails the search)', async () => {
+      const { prisma, llm } = baseDeps();
+      const provider = makeSourcingProvider([prospect('Acme')]);
+      const research = makeRunResearch(() => researchCompleted('d1'));
+
+      const orchestrator = new ProspectSearchOrchestrator({
+        prisma,
+        llm,
+        buildSourcingProvider: async () => provider,
+        buildEnrichmentProvider: async () => {
+          throw new Error('cred load failed');
+        },
+        emitEvent,
+        runResearch: research,
+      });
+
+      const result = await orchestrator.run({
+        prospectSearchId: 'camp-1',
+        orgId: 'org-1',
+        triggeredBy: 'user-1',
+        goal: 'Find lookalikes',
+        winsListId: null,
+        concurrency: 1,
+        budgetCents: 1000,
+      });
+
+      expect(result.status).toBe('completed');
+      expect(result.prospectCount).toBe(1);
     });
   });
 

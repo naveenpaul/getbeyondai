@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import type { PrismaClient } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import type {
@@ -28,6 +29,7 @@ import {
   waterfallSourcingService,
   type WaterfallConnector,
 } from '../connectors/sourcing/waterfall-sourcing.service';
+import type { CompanyEnrichmentProvider } from '../connectors/enrichment/enrichment-provider';
 import { upsertContact } from '../contacts/contact-upsert';
 import {
   searchCompleted,
@@ -190,7 +192,20 @@ export interface ProspectSearchOrchestratorDeps {
    * `SourcingUnavailableError` for benign, user-fixable problems (Apollo not
    * connected / key rejected) — the orchestrator surfaces those gracefully.
    */
-  buildSourcingProvider: (orgId: string) => Promise<SourcingProvider | null>;
+  buildSourcingProvider: (
+    orgId: string,
+    icp: IcpCriteria,
+  ) => Promise<SourcingProvider | null>;
+  /**
+   * Builds the per-run company-enrichment provider (Stage 2.5), or null when the
+   * org hasn't connected one. The worker loads + decrypts the PDL key; tests
+   * inject a fake. **Optional** — when absent (or it returns null) enrichment is
+   * skipped, so a prospectSearch without an enrichment connector behaves exactly
+   * as before (regression-safe).
+   */
+  buildEnrichmentProvider?: (
+    orgId: string,
+  ) => Promise<CompanyEnrichmentProvider | null>;
   /**
    * Builds the ordered enrichment connectors for Stage 5 (contact sourcing).
    * The worker loads the org's connected Snov/ZoomInfo accounts with decrypted
@@ -234,6 +249,7 @@ interface QualifiedOutcome {
 }
 
 export class ProspectSearchOrchestrator {
+  private readonly logger = new Logger(ProspectSearchOrchestrator.name);
   private readonly deps: ProspectSearchOrchestratorDeps;
   // Resolved model for this run (set at run() start). Safe as instance state:
   // the orchestrator is constructed per-run, run() is called once, and every
@@ -295,7 +311,10 @@ export class ProspectSearchOrchestrator {
       // ── 2. Source prospect pool (optional) ─────────────────────────
       let provider: SourcingProvider | null;
       try {
-        provider = await this.deps.buildSourcingProvider(input.orgId);
+        // Pass the derived ICP so the builder can route to the source whose geo
+        // coverage fits (e.g. a city-scoped goal → PDL, which does global city
+        // geo, over ZoomInfo, whose geo filters are US/Canada-only).
+        provider = await this.deps.buildSourcingProvider(input.orgId, derived.icp);
       } catch (err) {
         // A benign, user-fixable sourcing problem (Apollo not connected / key
         // rejected) — surface the actionable message and complete gracefully
@@ -343,13 +362,22 @@ export class ProspectSearchOrchestrator {
         ),
       );
 
+      // ── 2.5. Enrich firmographics (optional, best-effort) ───────────
+      // Backfill the nulls a CSV/ContactList pool leaves — domain (a sharper
+      // research target) + headcount (real fit-scoring input) — before the
+      // expensive qualify step. Never fails the prospectSearch.
+      const candidates = await this.enrichCandidates(
+        input.orgId,
+        sourced.candidates,
+      );
+
       // ── 3. Qualify + rank with bounded concurrency + budget cap ──────
       const outcomes = await this.qualifyAll({
         prospectSearchId,
         orgId: input.orgId,
         triggeredBy: input.triggeredBy,
         icp: derived.icp,
-        prospects: sourced.candidates,
+        prospects: candidates,
         budgetCents,
         concurrency,
       });
@@ -412,6 +440,62 @@ export class ProspectSearchOrchestrator {
     });
     this.deps.emitEvent(searchCompleted(prospectSearchId, 0, 0));
     return { status: 'completed', prospectCount: 0, costCents: 0 };
+  }
+
+  /**
+   * Stage 2.5 — best-effort firmographic enrichment of the sourced pool before
+   * qualification. Fills the firmographic nulls a CSV/ContactList pool leaves
+   * (domain → a sharper Researcher target; headcount → real fit-scoring input);
+   * the Apollo/ZoomInfo path is mostly already filled, so the provider skips
+   * those lookups. No-op when no enrichment connector is wired.
+   *
+   * NEVER fails the prospectSearch: a build error (key rejected / circuit open)
+   * or a per-company vendor fault degrades to "qualify with what we have". On
+   * the first hard fault mid-pool we stop enriching so a dead key / down vendor
+   * isn't hammered across all 25 companies — the remainder pass through
+   * untouched. Outcomes are logged (no silent degradation).
+   */
+  private async enrichCandidates(
+    orgId: string,
+    candidates: CandidateCompany[],
+  ): Promise<CandidateCompany[]> {
+    const build = this.deps.buildEnrichmentProvider;
+    if (!build) return candidates;
+
+    let provider: CompanyEnrichmentProvider | null;
+    try {
+      provider = await build(orgId);
+    } catch (err) {
+      this.logger.warn(
+        `enrichment skipped (provider unavailable): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return candidates;
+    }
+    if (!provider) return candidates;
+
+    const enriched: CandidateCompany[] = [];
+    let i = 0;
+    for (; i < candidates.length; i++) {
+      try {
+        enriched.push(await provider.enrich(candidates[i] as CandidateCompany));
+      } catch (err) {
+        // First hard vendor fault → stop enriching (don't hammer a dead key);
+        // keep what's enriched and pass the rest through untouched below.
+        this.logger.warn(
+          `enrichment via ${provider.name} aborted after ${i} of ` +
+            `${candidates.length}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+        );
+        break;
+      }
+    }
+    for (; i < candidates.length; i++) {
+      enriched.push(candidates[i] as CandidateCompany);
+    }
+    return enriched;
   }
 
   /**

@@ -26,3 +26,17 @@ export function resolveDeploymentMode(): DeploymentMode {
 export function isApolloAllowed(mode: DeploymentMode): boolean {
   return mode === 'self_host';
 }
+
+/**
+ * True when BYO-key PDL (People Data Labs) company enrichment may run.
+ *
+ * Allowed in EVERY deployment mode as of the 2026-06-05 product decision — both
+ * self-host and Cloud. Unlike Apollo, PDL's API Terms have NOT been vetted for
+ * the third-party-credentials prong that forces Apollo to self-host-only. If
+ * that vetting concludes PDL is likewise self-host-only, flip this single line
+ * to `return mode === 'self_host';` — it gates the connect controller and the
+ * enrichment-provider builder together, so nothing else needs to change.
+ */
+export function isPdlAllowed(mode: DeploymentMode): boolean {
+  return mode === 'self_host' || mode === 'cloud';
+}
