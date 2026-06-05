@@ -10,10 +10,15 @@ import {
 import { apolloSourceAdapter } from './adapters/apollo/apollo.source';
 import { snovSourceAdapter } from './adapters/snov/snov.source';
 import { zoominfoSourceAdapter } from './adapters/zoominfo/zoominfo.adapter';
+import { pdlSourceAdapter } from './adapters/pdl/pdl.source';
 import {
   ApolloConnectController,
   APOLLO_SOURCE_ADAPTER,
 } from './apollo-connect.controller';
+import {
+  PdlConnectController,
+  PDL_ENRICHMENT_ADAPTER,
+} from './pdl-connect.controller';
 import {
   SnovConnectController,
   SNOV_SOURCE_ADAPTER,
@@ -38,6 +43,7 @@ import { HubspotSyncWorker } from './hubspot-sync.worker';
     ApolloConnectController,
     SnovConnectController,
     ZoomInfoConnectController,
+    PdlConnectController,
   ],
   providers: [
     CsvImportWorker,
@@ -47,6 +53,7 @@ import { HubspotSyncWorker } from './hubspot-sync.worker';
     { provide: APOLLO_SOURCE_ADAPTER, useValue: apolloSourceAdapter },
     { provide: SNOV_SOURCE_ADAPTER, useValue: snovSourceAdapter },
     { provide: ZOOMINFO_SOURCE_ADAPTER, useValue: zoominfoSourceAdapter },
+    { provide: PDL_ENRICHMENT_ADAPTER, useValue: pdlSourceAdapter },
     { provide: DEPLOYMENT_MODE, useFactory: resolveDeploymentMode },
   ],
   exports: [CredentialManager],
