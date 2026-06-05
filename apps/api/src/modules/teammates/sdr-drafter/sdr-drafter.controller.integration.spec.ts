@@ -396,7 +396,7 @@ describe.skipIf(!DATABASE_URL)('SdrDrafterController (integration)', () => {
 
   // ─── happy path without a brief (web research path) ────────────────
 
-  it('runs without a briefDraftId: uses brave_search + fetch_url like the Researcher', async () => {
+  it('runs without a briefDraftId: uses web_search + fetch_url like the Researcher', async () => {
     const contact = await createContact({
       orgId: alice.orgId,
       email: 'tom@beta.com',
@@ -405,7 +405,7 @@ describe.skipIf(!DATABASE_URL)('SdrDrafterController (integration)', () => {
     });
 
     // Intercept the global fetch — the runtime tools resolve globalThis.fetch
-    // lazily so this is sufficient. brave_search hits api.search.brave.com,
+    // lazily so this is sufficient. web_search hits api.search.brave.com,
     // fetch_url hits the result URL.
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: string | URL | Request) => {
@@ -462,7 +462,7 @@ describe.skipIf(!DATABASE_URL)('SdrDrafterController (integration)', () => {
           return fakeMessage({
             content: [
               toolUseBlock(
-                'brave_search',
+                'web_search',
                 { query: 'Beta healthcare scheduling' },
                 'tu-2',
               ),

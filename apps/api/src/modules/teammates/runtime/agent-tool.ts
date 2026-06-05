@@ -9,7 +9,7 @@ import type { PrismaClient } from '@prisma/client';
  * land in the tool_result block for the next model turn.
  *
  * Tools that need to influence the audit log (every fetch_url, every
- * brave_search) write to `Citation` directly inside `execute`. The runtime
+ * web_search) write to `Citation` directly inside `execute`. The runtime
  * doesn't intermediate that — it only knows about the tool's name, args,
  * and return value, which get logged as a `ToolCall` row.
  *

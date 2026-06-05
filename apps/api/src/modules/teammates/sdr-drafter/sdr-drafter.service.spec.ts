@@ -150,12 +150,12 @@ describe('runSdrDrafter', () => {
     expect(opts.budgetCents).toBe(50);
     expect(opts.maxToolCalls).toBe(15);
     expect(opts.maxWallSecs).toBe(120);
-    // Default tool set: get_contact, get_research_brief, brave_search, fetch_url
+    // Default tool set: get_contact, get_research_brief, web_search, fetch_url
     expect(opts.tools.map((t) => t.name).sort()).toEqual([
-      'brave_search',
       'fetch_url',
       'get_contact',
       'get_research_brief',
+      'web_search',
     ]);
   });
 

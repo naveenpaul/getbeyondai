@@ -279,7 +279,7 @@ describe('runAgent — multi-turn with tool calls', () => {
     const searchExec = vi.fn(async () => ({ results: ['Acme is a SaaS startup'] }));
     const tools: AgentTool[] = [
       {
-        name: 'brave_search',
+        name: 'web_search',
         description: 'web search',
         inputSchema: { type: 'object' },
         execute: searchExec,
@@ -287,7 +287,7 @@ describe('runAgent — multi-turn with tool calls', () => {
     ];
     const llm = makeProvider([
       fakeMessage({
-        content: [toolUseBlock('brave_search', { q: 'Acme funding' }, 'tu-1')],
+        content: [toolUseBlock('web_search', { q: 'Acme funding' }, 'tu-1')],
       }),
       fakeMessage({
         content: [
@@ -322,9 +322,9 @@ describe('runAgent — multi-turn with tool calls', () => {
       { q: 'Acme funding' },
       expect.objectContaining({ runId: 'run-1', orgId: 'org-A' }),
     );
-    // Two tool calls persisted (brave_search + emit_draft)
+    // Two tool calls persisted (web_search + emit_draft)
     expect(prisma._toolCalls).toHaveLength(2);
-    expect(prisma._toolCalls[0]?.toolName).toBe('brave_search');
+    expect(prisma._toolCalls[0]?.toolName).toBe('web_search');
     expect(prisma._toolCalls[1]?.toolName).toBe('emit_draft');
     // toolSeq monotonic
     expect(prisma._toolCalls[0]?.toolSeq).toBe(1);
@@ -950,14 +950,14 @@ describe('runAgent — emitEvent progress callback', () => {
     }
   });
 
-  it('tool_call_completed includes a summary for brave_search + fetch_url', async () => {
+  it('tool_call_completed includes a summary for web_search + fetch_url', async () => {
     const prisma = makeProperFakePrisma(BASE_RUN, [
       { id: 'cit-1', runId: 'run-1', url: 'x' },
     ]);
     const events: RunEvent[] = [];
     const tools: AgentTool[] = [
       {
-        name: 'brave_search',
+        name: 'web_search',
         description: '',
         inputSchema: { type: 'object' },
         execute: vi.fn(async () => ({ results: [{ url: 'u1' }, { url: 'u2' }] })),
@@ -975,7 +975,7 @@ describe('runAgent — emitEvent progress callback', () => {
     const llm = makeProvider([
       fakeMessage({
         content: [
-          toolUseBlock('brave_search', { q: 'x' }, 'tu-1'),
+          toolUseBlock('web_search', { q: 'x' }, 'tu-1'),
           toolUseBlock('fetch_url', { url: 'https://acme.example' }, 'tu-2'),
         ],
       }),
@@ -1010,14 +1010,14 @@ describe('runAgent — emitEvent progress callback', () => {
       (e) => e.type === 'tool_call_completed',
     );
     const search = completions.find(
-      (e) => e.type === 'tool_call_completed' && e.data.toolName === 'brave_search',
+      (e) => e.type === 'tool_call_completed' && e.data.toolName === 'web_search',
     );
     const fetch = completions.find(
       (e) => e.type === 'tool_call_completed' && e.data.toolName === 'fetch_url',
     );
     if (search?.type === 'tool_call_completed') {
       expect(search.data.summary).toBe('2 results');
-    } else expect.fail('no brave_search completion');
+    } else expect.fail('no web_search completion');
     if (fetch?.type === 'tool_call_completed') {
       expect(fetch.data.summary).toContain('https://acme.example');
     } else expect.fail('no fetch_url completion');

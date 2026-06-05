@@ -199,7 +199,7 @@ export const EMIT_DRAFT_TOOL = {
   name: 'emit_draft',
   description:
     'Emit the final draft. Every claim MUST cite a Citation id that was ' +
-    'created earlier in this run (via fetch_url, brave_search, etc.) OR ' +
+    'created earlier in this run (via fetch_url, web_search, etc.) OR ' +
     'set abstained=true to signal "no source available". The runtime will ' +
     'drop any claim that lacks a citation and is not abstained.',
   input_schema: {

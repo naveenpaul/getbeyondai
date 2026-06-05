@@ -2,7 +2,7 @@ import type { PrismaClient } from '@prisma/client';
 import type { LlmProvider } from '../runtime/llm-provider';
 import { runAgent, type RunAgentResult } from '../runtime/tool-use-loop';
 import type { AgentTool } from '../runtime/agent-tool';
-import { braveSearchTool } from '../runtime/tools/brave-search';
+import { webSearchTool } from '../runtime/tools/web-search';
 import { fetchUrlTool } from '../runtime/tools/fetch-url';
 import type { RunEvent } from '../runtime/run-event-bus';
 import {
@@ -18,7 +18,7 @@ import {
  * for the Researcher, hand off to runAgent.
  *
  * What's specific to the Researcher (vs other teammates):
- *   - Tool allowlist: brave_search + fetch_url + (emit_draft, appended by the
+ *   - Tool allowlist: web_search + fetch_url + (emit_draft, appended by the
  *     runtime). No CRM tools, no email send — Researcher is read-only.
  *   - Default model: claude-sonnet-4-6 — Researcher needs reasoning over
  *     citations, not Haiku's speed.
@@ -95,7 +95,7 @@ export async function runResearch(
 ): Promise<ResearchResult> {
   // AgentRun was created by the controller; the worker just drives the
   // existing row to terminal via runAgent.
-  const tools = deps.tools ?? [braveSearchTool, fetchUrlTool];
+  const tools = deps.tools ?? [webSearchTool, fetchUrlTool];
 
   const result = await runAgent({
     runId: input.runId,

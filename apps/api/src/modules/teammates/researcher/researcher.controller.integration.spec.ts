@@ -226,7 +226,7 @@ describe.skipIf(!DATABASE_URL)(
           return fakeMessage({
             content: [
               toolUseBlock(
-                'brave_search',
+                'web_search',
                 { query: 'Acme dental SaaS' },
                 'tu-1',
               ),
@@ -458,7 +458,7 @@ describe.skipIf(!DATABASE_URL)(
       mockAnthropicCreate
         .mockResolvedValueOnce(
           fakeMessage({
-            content: [toolUseBlock('brave_search', { query: 'x' }, 'tu-1')],
+            content: [toolUseBlock('web_search', { query: 'x' }, 'tu-1')],
           }),
         )
         .mockResolvedValueOnce(
@@ -500,7 +500,7 @@ describe.skipIf(!DATABASE_URL)(
         orderBy: { toolSeq: 'asc' },
       });
       expect(toolCalls.map((t) => t.toolName)).toEqual([
-        'brave_search',
+        'web_search',
         'emit_draft',
       ]);
       expect(finalState.toolCallCount).toBe(2);

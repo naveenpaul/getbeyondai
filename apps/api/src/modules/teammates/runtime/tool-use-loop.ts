@@ -35,7 +35,7 @@ import type { RunEvent } from './run-event-bus';
  *
  * Why this shape:
  *   - emit_draft is appended to the tool list automatically. Teammates declare
- *     their own tools (brave_search, fetch_url, …); they don't import the
+ *     their own tools (web_search, fetch_url, …); they don't import the
  *     terminator.
  *   - Every tool call writes a ToolCall row keyed on `(runId, toolSeq)` — the
  *     schema's unique constraint catches accidental double-inserts under retry.
@@ -217,7 +217,7 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
     }
 
     // Parallel dispatch — the model routinely returns multiple independent
-    // tool_use blocks per turn (e.g. brave_search + 3 fetch_url calls). The
+    // tool_use blocks per turn (e.g. web_search + 3 fetch_url calls). The
     // model expects them to run concurrently; serial dispatch would burn
     // round-trip latency for no reason. Each tool's ToolCall row gets its
     // toolSeq assigned up front (array index) so the (runId, toolSeq)
@@ -454,7 +454,7 @@ async function dispatchOneToolUse(params: {
 function summarizeToolResult(toolName: string, result: unknown): string | undefined {
   if (typeof result !== 'object' || result === null) return undefined;
   const r = result as Record<string, unknown>;
-  if (toolName === 'brave_search' && Array.isArray(r.results)) {
+  if (toolName === 'web_search' && Array.isArray(r.results)) {
     return `${r.results.length} results`;
   }
   if (toolName === 'fetch_url' && typeof r.url === 'string') {
@@ -553,7 +553,7 @@ async function handleEmitDraft(params: {
         modelMessage:
           'All claims were dropped — each claim needs a citationId from a ' +
           'Citation row created earlier in this run (via fetch_url, ' +
-          'brave_search, etc.) OR abstained=true. Retry with valid claims.',
+          'web_search, etc.) OR abstained=true. Retry with valid claims.',
       };
     }
     throw err;

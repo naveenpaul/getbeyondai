@@ -2,7 +2,7 @@ import type { PrismaClient } from '@prisma/client';
 import type { LlmProvider } from '../runtime/llm-provider';
 import { runAgent, type RunAgentResult } from '../runtime/tool-use-loop';
 import type { AgentTool } from '../runtime/agent-tool';
-import { braveSearchTool } from '../runtime/tools/brave-search';
+import { webSearchTool } from '../runtime/tools/web-search';
 import { fetchUrlTool } from '../runtime/tools/fetch-url';
 import { getContactTool } from '../runtime/tools/get-contact';
 import { getResearchBriefTool } from '../runtime/tools/get-research-brief';
@@ -89,7 +89,7 @@ export async function runSdrDrafter(
   const tools = deps.tools ?? [
     getContactTool,
     getResearchBriefTool,
-    braveSearchTool,
+    webSearchTool,
     fetchUrlTool,
   ];
 

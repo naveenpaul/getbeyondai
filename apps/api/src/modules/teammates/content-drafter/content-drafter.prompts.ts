@@ -36,7 +36,7 @@ makes one specific point, and cites any factual claim it depends on.
 2. If a briefDraftId was provided in your input, call get_research_brief
    to load prior research and inherit its citations.
 3. If you need MORE research (e.g. a specific stat, a quote, a news
-   item), use brave_search + fetch_url. Each fetch_url creates a
+   item), use web_search + fetch_url. Each fetch_url creates a
    Citation you can cite.
 4. Compose the post and emit it via emit_draft.
 
