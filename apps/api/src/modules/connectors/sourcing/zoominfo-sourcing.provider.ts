@@ -1,5 +1,6 @@
 import {
   ZoomInfoAuthError,
+  ZoomInfoBadRequestError,
   ZoomInfoServerError,
   type ZoomInfoCompanySearchAttributes,
   type ZoomInfoDocument,
@@ -13,6 +14,7 @@ import type {
   SourcingResult,
 } from './sourcing-provider';
 import type { VendorHealthReporter } from './apollo-sourcing.provider';
+import { canonicalCountry } from './geo';
 
 /**
  * Live company-discovery sourcing provider backed by ZoomInfo's GTM CompanySearch.
@@ -87,12 +89,17 @@ export function employeeCountBuckets(
  * Map the provider-agnostic ICP to ZoomInfo CompanySearch attributes. Pure.
  *
  * Field names + formats VERIFIED against the live GTM Data API (2026-06-04):
- *   - `country`            — comma-delimited string of country names.
- *   - `companyDescription` — free-text; we fold ICP keywords + industries here
- *                            (the plan exposes no industry-name filter, and
- *                            `industryCodes` needs a numeric-code lookup we don't
- *                            have, so a description keyword search is the
- *                            pragmatic, working substitute).
+ *   - `country`            — comma-delimited string of country names ONLY. ICP
+ *                            `locations` are free-form (the model emits cities,
+ *                            states, or countries), but this attribute 400s on a
+ *                            non-country value — so we send only the locations we
+ *                            recognize as countries and fold the rest (cities,
+ *                            regions) into `companyDescription`.
+ *   - `companyDescription` — free-text; we fold ICP keywords + industries + any
+ *                            non-country locations here (the plan exposes no
+ *                            industry-name or city filter, so a description
+ *                            keyword search is the pragmatic, working substitute;
+ *                            precise location filtering happens at qualify+score).
  *   - `employeeCount`      — comma-delimited bucket tokens (see EMPLOYEE_BUCKETS).
  * Only attributes for ICP fields that are set are emitted, so an empty ICP yields
  * a broad (all-companies) search and the qualify+rank step does the fine filtering.
@@ -114,9 +121,22 @@ export function icpToZoomInfoCompanyCriteria(
     if (buckets.length) attrs['employeeCount'] = buckets.join(',');
   }
 
-  if (icp.locations.length) attrs['country'] = icp.locations.join(',');
+  // Partition locations: countries → the validated `country` filter; everything
+  // else (cities/states/regions) → the free-text description, so a value like
+  // "Bengaluru" can never 400 the search.
+  const countries: string[] = [];
+  const otherLocations: string[] = [];
+  for (const loc of icp.locations) {
+    const canonical = canonicalCountry(loc);
+    if (canonical) {
+      if (!countries.includes(canonical)) countries.push(canonical);
+    } else if (loc.trim().length > 0) {
+      otherLocations.push(loc.trim());
+    }
+  }
+  if (countries.length) attrs['country'] = countries.join(',');
 
-  const description = [...icp.keywords, ...icp.industries]
+  const description = [...icp.keywords, ...icp.industries, ...otherLocations]
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
   if (description.length) attrs['companyDescription'] = description.join(' ');
@@ -171,6 +191,15 @@ export class ZoomInfoSourcingProvider implements SourcingProvider {
           // User-fixable, not a run fault → graceful path.
           throw new SourcingUnavailableError(
             'ZoomInfo rejected the credentials — reconnect ZoomInfo to keep discovering companies.',
+          );
+        }
+        if (err instanceof ZoomInfoBadRequestError) {
+          // Bad criteria — retrying is pointless. Complete gracefully (ICP still
+          // shown) instead of failing the run with a raw vendor error. This
+          // commonly means a location ZoomInfo couldn't filter on (e.g. a city);
+          // qualify+score or a city-friendly source like Apollo handles those.
+          throw new SourcingUnavailableError(
+            "ZoomInfo couldn't run this search — its company search filters by country, not city/region. Try a country-level location, or use Apollo for finer targeting.",
           );
         }
         if (err instanceof ZoomInfoServerError) {

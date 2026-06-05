@@ -168,6 +168,19 @@ export class ZoomInfoServerError extends Error {
   }
 }
 
+/**
+ * Raised on 400 — ZoomInfo rejected the search criteria (e.g. an invalid
+ * `country`, a malformed bucket). NOT transient: retrying the same criteria
+ * fails identically, so the sourcing provider converts this to a graceful
+ * "couldn't run this search" outcome rather than letting it fail the run.
+ */
+export class ZoomInfoBadRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ZoomInfoBadRequestError';
+  }
+}
+
 /** A cached token plus the wall-clock ms after which it must be re-minted. */
 interface CachedToken {
   token: string;
@@ -364,6 +377,16 @@ export class ZoomInfoClient {
     if (response.status >= 500) {
       throw new ZoomInfoServerError(
         `ZoomInfo server error (HTTP ${response.status})`,
+      );
+    }
+    if (response.status === 400) {
+      // Bad criteria — not retryable. Surface a typed error so the sourcing
+      // provider can degrade gracefully instead of failing the run with a raw
+      // vendor JSON dump.
+      const text = await response.text().catch(() => '');
+      throw new ZoomInfoBadRequestError(
+        `ZoomInfo rejected the search criteria (HTTP 400)` +
+          (text ? `: ${text.slice(0, 200)}` : ''),
       );
     }
     if (!response.ok) {
