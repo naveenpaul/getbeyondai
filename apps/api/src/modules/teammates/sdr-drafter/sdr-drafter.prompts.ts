@@ -27,7 +27,7 @@ founder can send with minimal edits.
 2. If a briefDraftId was provided in your input, call get_research_brief
    to load prior research (and to receive fresh citationIds you can cite).
 3. If you need MORE research (e.g. the brief didn't cover a relevant angle),
-   use brave_search + fetch_url like the Researcher does. Each fetch_url
+   use web_search + fetch_url like the Researcher does. Each fetch_url
    creates a Citation you can cite later.
 4. Compose the email and emit it via emit_draft.
 

@@ -3,9 +3,10 @@
 # Local dev bootstrap + start.
 #
 # What it does (idempotent — safe to re-run):
-#   1. Check Docker is running and the postgres + minio containers are up.
-#   2. Check apps/api/.env exists with non-empty ANTHROPIC_API_KEY +
-#      BRAVE_SEARCH_API_KEY (Researcher / SDR Drafter won't work otherwise).
+#   1. Check Docker is running and the postgres + minio containers are up, and
+#      start the SearXNG sidecar (keyless web search for the Researcher).
+#   2. Check apps/api/.env exists with a non-empty ANTHROPIC_API_KEY, and that
+#      web search is wired (SearXNG running, or a BRAVE_SEARCH_API_KEY set).
 #   3. Check apps/web/.env.local exists.
 #   4. Create the `getbeyond` database if it doesn't exist.
 #   5. Run `prisma migrate deploy` so the schema is current.
@@ -90,6 +91,27 @@ else
   ok "MinIO container: $MINIO_CONTAINER"
 fi
 
+# SearXNG — keyless web search backend for the Researcher's web_search tool
+# (SEARCH_PROVIDER=searxng). Started here so research works out of the box with
+# no Brave subscription. Non-fatal: if it can't start, web_search falls back to
+# whatever SEARCH_PROVIDER / BRAVE_SEARCH_API_KEY is configured.
+searxng_healthy() { curl -sf -o /dev/null --max-time 2 http://localhost:8080/healthz 2>/dev/null; }
+if ! searxng_healthy; then
+  dim "Starting SearXNG (keyless web search)…"
+  docker compose --profile searxng up -d searxng >/dev/null 2>&1 \
+    || warn "Couldn't start SearXNG — falling back to the configured search provider."
+  for _ in $(seq 1 20); do searxng_healthy && break; sleep 2; done
+fi
+if searxng_healthy; then
+  # Export so the API process (started by `exec pnpm dev` below) inherits it and
+  # the search registry resolves `searxng` — no .env edit needed. An existing
+  # SEARXNG_URL / SEARCH_PROVIDER in the environment still wins.
+  export SEARXNG_URL="${SEARXNG_URL:-http://localhost:8080}"
+  ok "SearXNG running ($SEARXNG_URL) — web_search will use it"
+else
+  warn "SearXNG not healthy — research uses the configured SEARCH_PROVIDER / Brave key instead."
+fi
+
 # ─── 2. Env files ─────────────────────────────────────────────────────────
 API_ENV="apps/api/.env"
 WEB_ENV="apps/web/.env.local"
@@ -108,7 +130,16 @@ check_key() {
   fi
 }
 check_key ANTHROPIC_API_KEY
-check_key BRAVE_SEARCH_API_KEY
+
+# Web search needs EITHER the SearXNG sidecar (started above) OR a Brave key.
+BRAVE_KEY="$(grep -E '^BRAVE_SEARCH_API_KEY=' "$API_ENV" | head -n1 | cut -d= -f2-)"
+if searxng_healthy; then
+  ok "Web search → SearXNG (no key needed)"
+elif [ -n "$BRAVE_KEY" ]; then
+  ok "Web search → Brave API key set"
+else
+  warn "No web search configured — start SearXNG or set BRAVE_SEARCH_API_KEY, or the Researcher abstains."
+fi
 
 # ─── 3. Database ──────────────────────────────────────────────────────────
 DATABASE_URL="$(grep -E '^DATABASE_URL=' "$API_ENV" | head -n1 | cut -d= -f2-)"

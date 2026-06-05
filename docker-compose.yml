@@ -76,6 +76,29 @@ services:
       timeout: 5s
       retries: 5
 
+  # Opt-in keyless web-search backend for the web_search tool
+  # (SEARCH_PROVIDER=searxng). Behind the `searxng` profile so the default
+  # `docker compose up` does NOT start it — bring it up explicitly when you want
+  # keyless, self-hosted search instead of the Brave API:
+  #   docker compose --profile searxng up -d searxng
+  # Then set in the API env: SEARCH_PROVIDER=searxng, SEARXNG_URL=http://localhost:8080
+  # Config (JSON API enabled + bot-limiter off) lives in ./searxng/settings.yml.
+  searxng:
+    image: searxng/searxng:latest # upstream's recommended tag for the dev sidecar; pin a date tag for reproducibility
+    profiles: ["searxng"]
+    restart: unless-stopped
+    volumes:
+      - ./searxng:/etc/searxng:rw # provides settings.yml (json format + limiter off)
+    environment:
+      SEARXNG_BASE_URL: http://localhost:8080/
+    ports:
+      - "8080:8080" # published on localhost for the host-run API (like postgres/minio)
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 # api/web/worker services land in Phase B once the apps are scaffolded.
 
 volumes:

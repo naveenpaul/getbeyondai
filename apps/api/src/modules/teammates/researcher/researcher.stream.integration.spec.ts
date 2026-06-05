@@ -250,7 +250,7 @@ describe.skipIf(!DATABASE_URL)(
         .mockResolvedValueOnce(
           fakeMessage({
             content: [
-              toolUseBlock('brave_search', { query: 'Acme' }, 'tu-1'),
+              toolUseBlock('web_search', { query: 'Acme' }, 'tu-1'),
             ],
           }),
         )
@@ -348,7 +348,7 @@ describe.skipIf(!DATABASE_URL)(
         .mockImplementationOnce(async () => {
           await new Promise((r) => setTimeout(r, 80));
           return fakeMessage({
-            content: [toolUseBlock('brave_search', { query: 'x' }, 'tu-1')],
+            content: [toolUseBlock('web_search', { query: 'x' }, 'tu-1')],
           });
         })
         .mockResolvedValueOnce(
