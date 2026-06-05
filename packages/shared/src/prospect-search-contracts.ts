@@ -143,6 +143,15 @@ export interface ProspectContact {
   source: string;
 }
 
+/**
+ * Minimum fitScore a qualified company must reach before Stage 5 spends
+ * connector credits sourcing its contacts. The single source of truth, shared
+ * by the orchestrator (which enforces it) and the UI (which explains, on a
+ * prospect with no contacts, whether it was below this bar vs. genuinely had
+ * none found). Keep these in lockstep — see CONTACT_SOURCING_DEFAULTS.minFitScore.
+ */
+export const CONTACT_SOURCING_MIN_FIT_SCORE = 0.6;
+
 /** A sourced company qualified + scored against the ICP, with cited signals. */
 export interface QualifiedProspect {
   name: string;

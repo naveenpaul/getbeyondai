@@ -1,13 +1,14 @@
 import { Logger } from '@nestjs/common';
 import type { PrismaClient } from '@prisma/client';
 import { Prisma } from '@prisma/client';
-import type {
-  ProspectSearchEvent,
-  IcpSummary,
-  IcpCriteriaInput,
-  QualifiedProspect,
-  ResearcherDraftClaim,
-  RunEvent,
+import {
+  CONTACT_SOURCING_MIN_FIT_SCORE,
+  type ProspectSearchEvent,
+  type IcpSummary,
+  type IcpCriteriaInput,
+  type QualifiedProspect,
+  type ResearcherDraftClaim,
+  type RunEvent,
 } from '@getbeyond/shared';
 import { callModel } from '../teammates/runtime/call-model';
 import { BudgetExceededError } from '../teammates/runtime/cost';
@@ -115,8 +116,10 @@ export const CONTACT_SOURCING_DEFAULTS = {
    * sourcing its contacts. Sourcing is the expensive step (real ZoomInfo/Snov
    * credits), so it must only run on genuinely good matches — a weakly-matched
    * company (e.g. right country, wrong everything else) should never reach it.
+   * Sourced from the shared constant so the UI's "below fit threshold" empty
+   * state stays in lockstep with the gate the orchestrator actually enforces.
    */
-  minFitScore: 0.6,
+  minFitScore: CONTACT_SOURCING_MIN_FIT_SCORE,
 } as const;
 
 /** A ranked prospect slimmed to what Stage 5 target-selection needs. */
