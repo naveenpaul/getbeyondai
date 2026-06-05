@@ -30,6 +30,18 @@ describe('ClaimSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('accepts an abstained claim that OMITS citationId, defaulting it to null', () => {
+    // Regression: the model emits an abstention by leaving the key off entirely.
+    // `.nullable()` alone required the key present → zod rejected it and the
+    // model looped to no_draft_emitted. It must now parse with citationId=null.
+    const result = ClaimSchema.safeParse({
+      text: 'No verifiable information was found.',
+      abstained: true,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.citationId).toBeNull();
+  });
+
   it('defaults abstained to false when not provided', () => {
     const result = ClaimSchema.parse({
       text: 'x',

@@ -42,7 +42,14 @@ export type DraftTypeSchemaT = z.infer<typeof DraftTypeSchema>;
  */
 export const ClaimSchema = z.object({
   text: z.string().min(1, 'claim.text must be non-empty'),
-  citationId: z.string().nullable(),
+  // Optional + defaulted to null: an ABSTAINED claim has no citation, and the
+  // model emits it by omitting the key entirely. `.nullable()` alone still
+  // requires the key present, which rejected every abstention with a
+  // zod_validation_failed("citationId Required") and looped the model to
+  // no_draft_emitted. Defaulting a missing key to null restores the
+  // citation-OR-abstain escape hatch (invariant #4); persistence then keeps
+  // abstained-with-null claims and drops uncited non-abstained ones as before.
+  citationId: z.string().nullable().default(null),
   abstained: z.boolean().default(false),
   confidence: z.number().min(0).max(1).optional(),
 });
