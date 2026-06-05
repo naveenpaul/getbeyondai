@@ -1,0 +1,22 @@
+# SearXNG config for the getbeyond local-dev sidecar (opt-in `searxng` profile).
+#
+# Inherits SearXNG's built-in defaults and overrides ONLY what the Researcher
+# needs. Two overrides are load-bearing:
+#   - search.formats must include `json` — the default config exposes ONLY html,
+#     so SearxngSearchProvider's `format=json` request would get HTML back.
+#   - server.limiter must be off — the bot-detection limiter blocks the bursty,
+#     programmatic queries the Researcher fires. This instance is internal (not
+#     publicly exposed), so disabling it is safe here.
+use_default_settings: true
+
+server:
+  # Required by SearXNG (any non-empty value). Local dev only — this instance is
+  # not exposed publicly. Set a real secret via the mounted file in deployments.
+  secret_key: "getbeyond-local-dev-not-a-secret"
+  limiter: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json
