@@ -471,7 +471,13 @@ async function buildApolloProvider(
     creds = await credentials.load(account.id);
   } catch (err) {
     if (err instanceof CredentialManagerError) {
-      throw new SourcingUnavailableError(apolloUnavailableMessage(err.code));
+      // Explicit: surface "reconnect Apollo". Auto-discovery: a dead key must
+      // NOT abort the whole chain — drop Apollo and let the next capable source
+      // (PDL/ZoomInfo) try. Mirrors buildPdlProvider / buildZoomInfoProvider.
+      if (explicit) {
+        throw new SourcingUnavailableError(apolloUnavailableMessage(err.code));
+      }
+      return null;
     }
     throw err;
   }

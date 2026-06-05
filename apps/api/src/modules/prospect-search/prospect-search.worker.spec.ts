@@ -484,6 +484,46 @@ describe('buildSourcingProvider — PDL + geo-aware routing', () => {
       'zoominfo',
     ]);
   });
+
+  it('omits an expired-key Apollo from auto-discovery instead of aborting the whole chain', async () => {
+    // The reported bug: Apollo connected but its key was rejected. In auto-
+    // discovery a dead Apollo key must NOT throw — it should drop out and let the
+    // chain fall through to the other capable sources (PDL, ZoomInfo), exactly
+    // as a dead PDL/ZoomInfo key already does.
+    const prisma = prismaWithKinds(new Set(['pdl', 'apollo', 'zoominfo']));
+    const credentials = {
+      load: async (accountId: string) => {
+        if (accountId === 'acct-apollo') {
+          throw new CredentialManagerError('expired', 'key rejected');
+        }
+        return { apiKey: 'secret', clientId: 'id', clientSecret: 'sec' };
+      },
+    } as unknown as CredentialManager;
+    const provider = await buildSourcingProvider(
+      prisma, credentials, 'org-1', null,
+      undefined, undefined, fakeZi, icp(['Bengaluru']), fakePdl,
+    );
+    expect(provider).toBeInstanceOf(FallbackSourcingProvider);
+    // Apollo dropped; the chain still stands — PDL (city-capable) first,
+    // ZoomInfo last. No throw, so PDL + ZoomInfo actually get queried at runtime.
+    expect((provider as FallbackSourcingProvider).providers.map((p) => p.name)).toEqual([
+      'pdl',
+      'zoominfo',
+    ]);
+  });
+
+  it('returns null (no throw) when the only connected discovery source is an expired-key Apollo', async () => {
+    const prisma = prismaWithKinds(new Set(['apollo']));
+    const credentials = credentialsThatThrow(
+      new CredentialManagerError('expired', 'key rejected'),
+    );
+    expect(
+      await buildSourcingProvider(
+        prisma, credentials, 'org-1', null,
+        undefined, undefined, fakeZi, icp(['Bengaluru']), fakePdl,
+      ),
+    ).toBeNull();
+  });
 });
 
 describe('buildEnrichmentProvider', () => {

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { FallbackSourcingProvider } from './fallback-sourcing.provider';
 import {
   SourcingUnavailableError,
+  type CandidateCompany,
   type IcpCriteria,
   type SourcingProvider,
   type SourcingResult,
@@ -16,8 +17,25 @@ const ICP: IcpCriteria = {
   locations: [],
 };
 
+function candidate(name: string): CandidateCompany {
+  return {
+    name,
+    domain: null,
+    linkedinUrl: null,
+    employeeCount: null,
+    fundingStage: null,
+    raw: {},
+  };
+}
+
+/** A successful search that FOUND companies. */
 function result(name: string): SourcingResult {
-  return { candidates: [], summary: `${name}: ok` };
+  return { candidates: [candidate(name)], summary: `${name}: ok` };
+}
+
+/** A successful search that found NOTHING (a valid "no matches" answer). */
+function emptyResult(name: string): SourcingResult {
+  return { candidates: [], summary: `${name}: no matches` };
 }
 
 /** A provider whose findCandidates does `impl`. */
@@ -39,7 +57,7 @@ describe('FallbackSourcingProvider', () => {
     expect(fb.providers).toHaveLength(2);
   });
 
-  it('uses the first provider when it succeeds (no fall-through)', async () => {
+  it('uses the first provider that FINDS companies (no fall-through)', async () => {
     const apollo = provider('apollo', async () => result('apollo'));
     const fb = new FallbackSourcingProvider([
       provider('pdl', async () => result('pdl')),
@@ -61,15 +79,40 @@ describe('FallbackSourcingProvider', () => {
     expect(res.summary).toBe('apollo: ok');
   });
 
-  it('treats an empty result as success — does NOT fall through on 0 matches', async () => {
-    const zoom = provider('zoominfo', async () => result('zoominfo'));
+  it('falls through on an EMPTY result and returns the next provider that finds companies', async () => {
+    const apollo = provider('apollo', async () => result('apollo'));
     const fb = new FallbackSourcingProvider([
-      provider('pdl', async () => ({ candidates: [], summary: 'pdl: no matches' })),
-      zoom,
+      provider('pdl', async () => emptyResult('pdl')),
+      apollo,
     ]);
     const res = await fb.findCandidates(ICP);
+    expect(res.summary).toBe('apollo: ok');
+    expect(apollo.findCandidates).toHaveBeenCalledOnce();
+  });
+
+  it('returns the first empty result when EVERY provider genuinely found nothing (none unavailable)', async () => {
+    const fb = new FallbackSourcingProvider([
+      provider('pdl', async () => emptyResult('pdl')),
+      provider('zoominfo', async () => emptyResult('zoominfo')),
+    ]);
+    const res = await fb.findCandidates(ICP);
+    // A true cross-source "no matches" — surfaced as the primary's empty result,
+    // NOT an error (the user has nothing to fix).
+    expect(res.candidates).toHaveLength(0);
     expect(res.summary).toBe('pdl: no matches');
-    expect(zoom.findCandidates).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the actionable error when one source is unavailable and the rest find nothing (the reported bug)', async () => {
+    // PDL is out of credits (the only city-capable source); ZoomInfo runs but
+    // returns nothing for the city goal. The user must NOT see a silent "0
+    // results" — they should be told PDL is out of credits so they can fix it.
+    const fb = new FallbackSourcingProvider([
+      provider('pdl', async () => {
+        throw new SourcingUnavailableError('PDL is out of search credits — top up PDL.');
+      }),
+      provider('zoominfo', async () => emptyResult('zoominfo')),
+    ]);
+    await expect(fb.findCandidates(ICP)).rejects.toThrow(/out of search credits/);
   });
 
   it('re-throws the LAST actionable error when every provider is unavailable', async () => {
