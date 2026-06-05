@@ -87,6 +87,15 @@ it upstream: **the Brain serves the Researcher, not just the SDR Drafter.**
   single campaign, so it doesn't pollute the permanent Brain. Brain is the
   default; per-run is the escape hatch.
 
+### Derived ICP promotion
+
+The first useful Prospect Search can derive an ICP from the founder's goal plus a
+wins list. That derived ICP should be reviewable and promotable into
+`CompanyBrain.icp`, with provenance back to the source search, wins list, and
+derivation run. Future searches should start from the saved Brain ICP unless the
+user chooses a new wins list or edits explicit ICP criteria; per-search ICP
+snapshots remain as audit records.
+
 ### Trust model extends to your own materials
 
 The cite-or-abstain rule already governs claims about the target. Pointed at the
