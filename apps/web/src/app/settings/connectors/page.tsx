@@ -15,18 +15,24 @@ import { Input } from '@/components/ui/input';
 import {
   ApiError,
   connectApollo,
+  connectPdl,
   connectSnov,
   connectZoomInfo,
   getApolloStatus,
+  getPdlStatus,
   getSnovStatus,
   getZoomInfoStatus,
   type ApolloAccountStatus,
+  type PdlAccountStatus,
   type SnovAccountStatus,
   type ZoomInfoAccountStatus,
 } from '@/lib/api-client';
 
 /** A BYO-key connector's connection state — shared shape for Snov + ZoomInfo. */
 type ByoStatus = SnovAccountStatus | ZoomInfoAccountStatus;
+
+/** A single-key connector's connection state — shared shape for Apollo + PDL. */
+type SingleKeyStatus = { available: boolean; connected: boolean; status?: string };
 
 /**
  * Settings → Connectors. Where the org wires data sources for prospectSearch
@@ -37,6 +43,7 @@ type ByoStatus = SnovAccountStatus | ZoomInfoAccountStatus;
  */
 export default function ConnectorsSettingsPage(): React.JSX.Element {
   const [status, setStatus] = useState<ApolloAccountStatus | null>(null);
+  const [pdlStatus, setPdlStatus] = useState<PdlAccountStatus | null>(null);
   const [snovStatus, setSnovStatus] = useState<SnovAccountStatus | null>(null);
   const [zoomStatus, setZoomStatus] = useState<ZoomInfoAccountStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -44,12 +51,14 @@ export default function ConnectorsSettingsPage(): React.JSX.Element {
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      const [apollo, snov, zoom] = await Promise.all([
+      const [apollo, pdl, snov, zoom] = await Promise.all([
         getApolloStatus(),
+        getPdlStatus(),
         getSnovStatus(),
         getZoomInfoStatus(),
       ]);
       setStatus(apollo);
+      setPdlStatus(pdl);
       setSnovStatus(snov);
       setZoomStatus(zoom);
     } catch (err) {
@@ -74,7 +83,12 @@ export default function ConnectorsSettingsPage(): React.JSX.Element {
     );
   }
 
-  if (status === null || snovStatus === null || zoomStatus === null) {
+  if (
+    status === null ||
+    pdlStatus === null ||
+    snovStatus === null ||
+    zoomStatus === null
+  ) {
     return (
       <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -96,7 +110,41 @@ export default function ConnectorsSettingsPage(): React.JSX.Element {
           </p>
         </div>
 
-        <ApolloConnectorCard status={status} onConnected={() => void load()} />
+        <SingleKeyConnectorCard
+          title="Apollo"
+          keyLabel="Apollo API key"
+          unavailableBadgeLabel="Self-host only"
+          unavailableHelp="Apollo discovery is available on self-hosted getbeyond only — its API terms don’t permit a hosted integration."
+          connectedHelp="A key is configured. Discovery runs against Apollo for new searches. Paste a new key to replace it."
+          unconnectedHelp="Add your Apollo API key to discover companies matching each search’s ICP. Find it in Apollo under Settings → Integrations → API."
+          status={status}
+          onConnect={connectApollo}
+          onConnected={() => void load()}
+        />
+      </section>
+
+      <section className="space-y-4">
+        <div className="space-y-1">
+          <h2 className="text-lg font-semibold tracking-tight">Enrichment</h2>
+          <p className="text-sm text-muted-foreground">
+            Fill in firmographics (headcount, domain, industry) on sourced
+            companies before they’re qualified — so research and fit-scoring work
+            from real data, not guesses. Especially useful when your source is an
+            imported list.
+          </p>
+        </div>
+
+        <SingleKeyConnectorCard
+          title="People Data Labs"
+          keyLabel="PDL API key"
+          unavailableBadgeLabel="Unavailable"
+          unavailableHelp="PDL enrichment isn’t available on this deployment."
+          connectedHelp="A key is configured. New searches enrich sourced companies with PDL firmographics before qualification. Paste a new key to replace it."
+          unconnectedHelp="Add your PDL API key to enrich sourced companies (headcount, domain, industry) before qualification. Find it in PDL under Settings → API Keys."
+          status={pdlStatus}
+          onConnect={connectPdl}
+          onConnected={() => void load()}
+        />
       </section>
 
       <section className="space-y-4">
@@ -136,16 +184,40 @@ export default function ConnectorsSettingsPage(): React.JSX.Element {
   );
 }
 
-function ApolloConnectorCard({
+/**
+ * A single-field BYO-key connector card (one API key). Shared by Apollo
+ * (discovery, self-host-gated) and PDL (enrichment, all modes) — same shape,
+ * different labels/help/connect fn. When the API reports `available:false` the
+ * key field is hidden and the card explains why (`unavailableHelp` +
+ * `unavailableBadgeLabel`). The input id is a slug of the title so two cards'
+ * fields don't collide.
+ */
+function SingleKeyConnectorCard({
+  title,
+  keyLabel,
+  connectedHelp,
+  unconnectedHelp,
+  unavailableHelp,
+  unavailableBadgeLabel,
   status,
+  onConnect,
   onConnected,
 }: {
-  status: ApolloAccountStatus;
+  title: string;
+  keyLabel: string;
+  connectedHelp: string;
+  unconnectedHelp: string;
+  unavailableHelp: string;
+  unavailableBadgeLabel: string;
+  status: SingleKeyStatus;
+  onConnect: (apiKey: string) => Promise<unknown>;
   onConnected: () => void;
 }): React.JSX.Element {
   const [apiKey, setApiKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
   async function onSubmit(e: React.FormEvent): Promise<void> {
     e.preventDefault();
@@ -154,7 +226,7 @@ function ApolloConnectorCard({
     setSubmitting(true);
     setError(null);
     try {
-      await connectApollo(trimmed);
+      await onConnect(trimmed);
       setApiKey('');
       onConnected();
     } catch (err) {
@@ -175,27 +247,30 @@ function ApolloConnectorCard({
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <Plug className="h-4 w-4 text-muted-foreground" />
-            Apollo
+            {title}
           </CardTitle>
-          <ApolloStatusBadge status={status} />
+          <SingleKeyStatusBadge
+            status={status}
+            unavailableBadgeLabel={unavailableBadgeLabel}
+          />
         </div>
         <CardDescription>
           {!status.available
-            ? 'Apollo discovery is available on self-hosted getbeyond only — its API terms don’t permit a hosted integration.'
+            ? unavailableHelp
             : status.connected
-              ? 'A key is configured. Discovery runs against Apollo for new searches. Paste a new key to replace it.'
-              : 'Add your Apollo API key to discover companies matching each search’s ICP. Find it in Apollo under Settings → Integrations → API.'}
+              ? connectedHelp
+              : unconnectedHelp}
         </CardDescription>
       </CardHeader>
       {status.available ? (
         <CardContent>
           <form className="flex flex-wrap items-end gap-3" onSubmit={onSubmit}>
             <div className="min-w-[16rem] flex-1 space-y-1">
-              <label htmlFor="apollo-api-key" className="text-xs font-medium">
-                Apollo API key
+              <label htmlFor={`${slug}-api-key`} className="text-xs font-medium">
+                {keyLabel}
               </label>
               <Input
-                id="apollo-api-key"
+                id={`${slug}-api-key`}
                 type="password"
                 autoComplete="off"
                 placeholder={status.connected ? '••••••••••••' : 'Paste key…'}
@@ -223,16 +298,18 @@ function ApolloConnectorCard({
   );
 }
 
-function ApolloStatusBadge({
+function SingleKeyStatusBadge({
   status,
+  unavailableBadgeLabel,
 }: {
-  status: ApolloAccountStatus;
+  status: SingleKeyStatus;
+  unavailableBadgeLabel: string;
 }): React.JSX.Element {
   if (!status.available) {
     return (
       <Badge variant="outline">
         <Info className="mr-1 h-3 w-3" />
-        Self-host only
+        {unavailableBadgeLabel}
       </Badge>
     );
   }
