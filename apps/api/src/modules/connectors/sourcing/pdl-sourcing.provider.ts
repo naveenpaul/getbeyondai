@@ -80,9 +80,14 @@ export function pdlSizeBuckets(min: number | null, max: number | null): string[]
  * terms (e.g. "startup") are dropped from the PDL filter — the search stays
  * broad and the scorer refines, rather than over-filtering to zero.
  */
+// NOTE: PDL's `"information services"` is a NON-tech catch-all (job boards,
+// research/reports, talent/data services). Verified live (2026-06-05) it
+// dominates the Bengaluru long tail and surfaced consultancies + news hubs as
+// "IT". It is deliberately excluded from every mapping below — the IT terms map
+// only to genuine tech industries.
 const INDUSTRY_SYNONYMS: Readonly<Record<string, readonly string[]>> = {
-  it: ['information technology and services', 'computer software', 'internet', 'information services'],
-  'information technology': ['information technology and services', 'information services'],
+  it: ['information technology and services', 'computer software', 'internet'],
+  'information technology': ['information technology and services', 'computer software', 'internet'],
   technology: ['information technology and services', 'computer software', 'internet'],
   tech: ['information technology and services', 'computer software', 'internet'],
   software: ['computer software', 'information technology and services'],

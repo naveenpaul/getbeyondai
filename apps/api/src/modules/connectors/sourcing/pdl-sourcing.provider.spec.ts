@@ -63,8 +63,15 @@ describe('pdlIndustriesFor', () => {
       'information technology and services',
       'computer software',
       'internet',
-      'information services',
     ]);
+  });
+
+  it('excludes PDL\'s non-tech "information services" catch-all from IT terms', () => {
+    // Verified live: "information services" pulls in job boards / consultancies.
+    expect(pdlIndustriesFor(['IT'])).not.toContain('information services');
+    expect(pdlIndustriesFor(['information technology'])).not.toContain(
+      'information services',
+    );
   });
 
   it('drops unmapped terms (e.g. "startup")', () => {
@@ -87,7 +94,6 @@ describe('icpToPdlSearchQuery', () => {
                 { term: { industry: 'information technology and services' } },
                 { term: { industry: 'computer software' } },
                 { term: { industry: 'internet' } },
-                { term: { industry: 'information services' } },
               ],
             },
           },
