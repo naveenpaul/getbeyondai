@@ -24,6 +24,14 @@ describe('normalizeDomain', () => {
   it('returns null when only a scheme is present', () => {
     expect(normalizeDomain('https://')).toBeNull();
   });
+
+  it('returns null for a value with no TLD (LLM junk: "null", bare name)', () => {
+    // Live-run regression: gpt-4o-mini emitted the string "null" for a missing
+    // domain; a real domain must have a dot, so these are rejected.
+    expect(normalizeDomain('null')).toBeNull();
+    expect(normalizeDomain('none')).toBeNull();
+    expect(normalizeDomain('Acme Corp')).toBeNull();
+  });
 });
 
 describe('normalizeCompanyName', () => {

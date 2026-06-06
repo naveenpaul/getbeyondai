@@ -29,6 +29,9 @@ export function normalizeDomain(raw: string | null | undefined): string | null {
     .split('/')[0]!
     .split('?')[0]!
     .split('#')[0]!;
+  // A real domain has a TLD (a dot). This rejects bare junk the LLM sometimes
+  // emits for a missing domain ("null", "none", "n/a", a bare company name).
+  if (!s.includes('.')) return null;
   return s.length > 0 ? s : null;
 }
 
