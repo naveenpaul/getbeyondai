@@ -11,6 +11,7 @@ import {
   prospectQualified,
   icpDerived,
   isTerminalProspectSearchEvent,
+  companiesDiscovered,
   sourcingCompleted,
   sourcingStarted,
   toBusEvent,
@@ -80,6 +81,20 @@ describe('prospect-search-events factories', () => {
     expect(e.type).toBe('sourcing_completed');
     if (e.type === 'sourcing_completed') {
       expect(e.data).toEqual({ summary: 'Read 12 companies', prospectCount: 12 });
+    }
+  });
+
+  it('companiesDiscovered', () => {
+    const companies = [
+      { name: 'Acme', domain: 'acme.com' },
+      { name: 'Globex', domain: null },
+    ];
+    const e = companiesDiscovered(CID, companies, 2);
+    expect(e.type).toBe('companies_discovered');
+    expect(e.prospectSearchId).toBe(CID);
+    expectIso(e.at);
+    if (e.type === 'companies_discovered') {
+      expect(e.data).toEqual({ companies, total: 2 });
     }
   });
 

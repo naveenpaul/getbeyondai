@@ -12,13 +12,14 @@
  * backend therefore can't touch the trust model; it only changes which URLs the
  * model gets to consider fetching.
  *
- * Providers: `BraveSearchProvider` (Brave Search API — the Cloud default, paid,
- * ToS-clean) and `SearxngSearchProvider` (self-hosted, keyless metasearch — the
- * self-host default). See docs/plans/search-provider-abstraction.md.
+ * Provider: `SearxngSearchProvider` (self-hosted, keyless metasearch) is the
+ * only backend — search is keyless across both self-host and Cloud. The seam is
+ * kept so another engine can be added later without touching the trust chain.
+ * See docs/plans/search-provider-abstraction.md.
  */
 
-/** One search hit, provider-neutral. Identical to the legacy Brave shape so the
- *  `web_search` tool's output (and the Researcher) are unchanged. */
+/** One search hit, provider-neutral. Stable across engines so the `web_search`
+ *  tool's output (and the Researcher) are unchanged. */
 export interface SearchResult {
   title: string;
   url: string;
@@ -34,7 +35,7 @@ export interface SearchOutput {
 
 /** A swappable web-search backend. One implementation per engine. */
 export interface SearchProvider {
-  /** Stable provider id ('brave' | 'searxng') — surfaced in errors/audit. */
+  /** Stable provider id ('searxng') — surfaced in errors/audit. */
   readonly name: string;
   /**
    * Run a web search and return up to ~`count` results. Throws
@@ -45,8 +46,9 @@ export interface SearchProvider {
   search(query: string, opts?: { count?: number }): Promise<SearchOutput>;
 }
 
-/** Names the registry switches on. Keep in sync with the registry's cases. */
-export type SearchProviderName = 'brave' | 'searxng';
+/** Names the registry switches on. Keep in sync with the registry's cases.
+ *  Single-member today; the union is retained so adding an engine is additive. */
+export type SearchProviderName = 'searxng';
 
 /**
  * Neutral search-provider error. Adapters wrap transport/parse failures in this

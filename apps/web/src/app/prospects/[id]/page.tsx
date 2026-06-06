@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2, RotateCw } from 'lucide-react';
 import type {
   ProspectSearchDetailResponse,
+  ProspectSearchEvent,
   ProspectSearchStatus,
 } from '@getbeyond/shared';
 import { Badge } from '@/components/ui/badge';
@@ -230,31 +231,49 @@ function RerunButton({
 }
 
 /**
- * Renders prospects already persisted on the prospectSearch when there's no live
- * stream (e.g. reopening a completed prospectSearch). Reuses the transcript's
- * prospect rendering by synthesizing prospect_qualified events would be
- * heavier than warranted — a thin list mirrors the same card shape.
+ * Renders the persisted snapshot of a prospectSearch when there's no live stream
+ * (e.g. reopening a completed search). Replays the discovered-companies panel
+ * and the qualified-prospect cards through the SAME transcript renderer by
+ * synthesizing the events the stream would have sent — so the reload view and
+ * the live view stay DRY and identical. The discovered companies are persisted
+ * separately from the Prospect rows (the full pool before qualify dropped the
+ * low-fit ones), so they survive reload even when nothing qualified.
  */
 function PersistedProspects({
   detail,
 }: {
   detail: ProspectSearchDetailResponse;
 }): React.JSX.Element {
-  if (detail.prospects.length === 0) {
+  const synthetic: ProspectSearchEvent[] = [];
+
+  if (detail.discoveredCompanies.length > 0) {
+    synthetic.push({
+      type: 'companies_discovered',
+      prospectSearchId: detail.prospectSearch.id,
+      at: detail.prospectSearch.updatedAt,
+      data: {
+        companies: detail.discoveredCompanies,
+        total: detail.discoveredCompanies.length,
+      },
+    });
+  }
+
+  detail.prospects.forEach((prospect, i) => {
+    synthetic.push({
+      type: 'prospect_qualified',
+      prospectSearchId: detail.prospectSearch.id,
+      at: detail.prospectSearch.updatedAt,
+      data: { prospect, index: i, total: detail.prospects.length },
+    });
+  });
+
+  if (synthetic.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
         No qualified prospects yet.
       </p>
     );
   }
-  // Replay persisted prospects through the same transcript renderer by
-  // building synthetic prospect_qualified events, so the card UI stays DRY.
-  const synthetic = detail.prospects.map((prospect, i) => ({
-    type: 'prospect_qualified' as const,
-    prospectSearchId: detail.prospectSearch.id,
-    at: detail.prospectSearch.updatedAt,
-    data: { prospect, index: i, total: detail.prospects.length },
-  }));
   return <ProspectSearchTranscript events={synthetic} terminated />;
 }
 

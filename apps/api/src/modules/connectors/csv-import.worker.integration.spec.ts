@@ -65,7 +65,7 @@ describe.skipIf(!DATABASE_URL)(
         );
       }
       process.env.ANTHROPIC_API_KEY ||= 'test-anthropic-key';
-      process.env.BRAVE_SEARCH_API_KEY ||= 'test-brave-key';
+      process.env.SEARXNG_URL ||= 'http://searxng.test';
       process.env.CREDENTIAL_MASTER_KEY ||= Buffer.from(
         new Uint8Array(32).fill(7),
       ).toString('base64');

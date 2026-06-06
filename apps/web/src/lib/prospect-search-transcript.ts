@@ -1,5 +1,6 @@
 import type {
   ProspectSearchEvent,
+  DiscoveredCompany,
   IcpSummary,
   QualifiedProspect,
   RunEvent,
@@ -13,6 +14,8 @@ import type {
  *  - "what's being run" lines (tool_activity, wrapping a RunEvent) — the
  *    granular tool calls, collapsed so a started/completed pair updates one
  *    row in place rather than emitting two
+ *  - a discovered-companies panel (companies_discovered) — every company the
+ *    source found, shown before qualify narrows the pool to contacts
  *  - prospect result cards (prospect_qualified) — the actual output
  *
  * Kept pure (no React) so it's the unit-test target for the feature: feed an
@@ -25,7 +28,12 @@ import type {
  * pairs from colliding across runs.
  */
 
-export type ProspectSearchRowKind = 'phase' | 'tool' | 'prospect' | 'terminal';
+export type ProspectSearchRowKind =
+  | 'phase'
+  | 'tool'
+  | 'discovered'
+  | 'prospect'
+  | 'terminal';
 
 interface BaseRow {
   /** Stable React key + de-dup identity. */
@@ -48,6 +56,13 @@ export interface ToolRow extends BaseRow {
   secondary?: string;
 }
 
+export interface DiscoveredRow extends BaseRow {
+  kind: 'discovered';
+  companies: DiscoveredCompany[];
+  /** Total found by the source (may exceed `companies.length` if ever capped). */
+  total: number;
+}
+
 export interface ProspectRow extends BaseRow {
   kind: 'prospect';
   prospect: QualifiedProspect;
@@ -62,7 +77,12 @@ export interface TerminalRow extends BaseRow {
   secondary?: string;
 }
 
-export type ProspectSearchRow = PhaseRow | ToolRow | ProspectRow | TerminalRow;
+export type ProspectSearchRow =
+  | PhaseRow
+  | ToolRow
+  | DiscoveredRow
+  | ProspectRow
+  | TerminalRow;
 
 export interface ProspectSearchTranscript {
   rows: ProspectSearchRow[];
@@ -119,6 +139,15 @@ export function buildProspectSearchTranscript(
           kind: 'phase',
           primary: 'Sourcing complete',
           secondary: `${e.data.prospectCount} prospects · ${e.data.summary}`,
+        });
+        break;
+
+      case 'companies_discovered':
+        rows.push({
+          key: `discovered|${e.at}`,
+          kind: 'discovered',
+          companies: e.data.companies,
+          total: e.data.total,
         });
         break;
 
@@ -216,7 +245,8 @@ function applyToolActivity(
 }
 
 export function describeToolStart(toolName: string, args: unknown): string {
-  if (toolName === 'brave_search') {
+  // 'brave_search' is the legacy tool name kept for historical AgentRun records.
+  if (toolName === 'web_search' || toolName === 'brave_search') {
     const q = (args as { query?: string } | undefined)?.query;
     return q ? `Searching for "${q}"…` : 'Searching the web…';
   }
@@ -229,7 +259,7 @@ export function describeToolStart(toolName: string, args: unknown): string {
 
 export function describeToolDone(toolName: string, isError: boolean): string {
   if (isError) return `${toolName} failed`;
-  if (toolName === 'brave_search') return 'Got search results';
+  if (toolName === 'web_search' || toolName === 'brave_search') return 'Got search results';
   if (toolName === 'fetch_url') return 'Fetched page';
   return `Ran ${toolName}`;
 }

@@ -595,10 +595,35 @@ describe('ProspectSearchOrchestrator', () => {
         'icp_derived',
         'sourcing_started',
         'sourcing_completed',
+        'companies_discovered',
         'prospect_qualified',
         'prospect_qualified',
         'search_completed',
       ]);
+
+      // The discovery step surfaces the full pool (name + domain) and persists
+      // it on the search so it survives a reload.
+      const discovered = events.find((e) => e.type === 'companies_discovered');
+      if (discovered?.type === 'companies_discovered') {
+        expect(discovered.data).toEqual({
+          companies: [
+            { name: 'Alpha', domain: 'alpha.com' },
+            { name: 'Beta', domain: 'beta.com' },
+          ],
+          total: 2,
+        });
+      }
+      expect(prisma.prospectSearch.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'camp-1' },
+          data: {
+            discoveredCompanies: [
+              { name: 'Alpha', domain: 'alpha.com' },
+              { name: 'Beta', domain: 'beta.com' },
+            ],
+          },
+        }),
+      );
 
       // ProspectSearch row transitioned to completed.
       expect(prisma._prospectSearchUpdates).toContainEqual({

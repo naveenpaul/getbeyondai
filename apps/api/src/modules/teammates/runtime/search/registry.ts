@@ -3,7 +3,6 @@ import {
   type SearchProvider,
   type SearchProviderName,
 } from './search-provider';
-import { BraveSearchProvider } from './providers/brave.provider';
 import { SearxngSearchProvider } from './providers/searxng.provider';
 
 /**
@@ -13,16 +12,14 @@ import { SearxngSearchProvider } from './providers/searxng.provider';
  * `SearchProvider`. Adding a provider = adding a case here + its class; the
  * `never` exhaustiveness check makes a forgotten case a compile error.
  *
- * Default resolution (see docs/plans/search-provider-abstraction.md §6):
- * an explicit `SEARCH_PROVIDER` wins; else if `SEARXNG_URL` is set we assume a
- * self-host running SearXNG; else `brave`. A self-hoster therefore gets keyless
- * search just by pointing `SEARXNG_URL` at their instance; Cloud stays on Brave.
+ * SearXNG (self-hosted, keyless) is the only backend — search is keyless across
+ * both self-host and Cloud. The only configuration is `SEARXNG_URL` (the
+ * instance base URL); `./dev.sh` starts the sidecar and exports it locally.
+ * See docs/plans/search-provider-abstraction.md §6.
  */
 
 export interface SearchProviderConfig {
   name: SearchProviderName;
-  /** Required when name === 'brave'. */
-  braveApiKey?: string;
   /** Required when name === 'searxng'. The instance base URL. */
   searxngUrl?: string;
   /** Optional bearer token gating the SearXNG instance. */
@@ -34,12 +31,11 @@ export function createSearchProvider(
   config: SearchProviderConfig,
 ): SearchProvider {
   switch (config.name) {
-    case 'brave':
-      return new BraveSearchProvider({ apiKey: config.braveApiKey });
     case 'searxng':
       if (!config.searxngUrl) {
         throw new SearchProviderError(
-          'SEARCH_PROVIDER=searxng requires SEARXNG_URL to be set',
+          'Search requires SEARXNG_URL to be set (run ./dev.sh to start the ' +
+            'SearXNG sidecar, or point SEARXNG_URL at your instance)',
           'searxng',
         );
       }
@@ -55,20 +51,19 @@ export function createSearchProvider(
   }
 }
 
-/** Resolve a config from environment variables (default: see module docs). */
+/** Resolve a config from environment variables. SearXNG is the only provider;
+ *  `SEARCH_PROVIDER` is honoured only to surface a typo'd value as a loud error
+ *  rather than silently ignoring it. */
 export function resolveSearchProviderConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): SearchProviderConfig {
   const raw = env.SEARCH_PROVIDER?.trim().toLowerCase();
-  const searxngUrl = env.SEARXNG_URL?.trim() || undefined;
-  // Explicit override wins; else infer from whether a SearXNG instance is wired;
-  // else Brave. A non-empty unknown value surfaces as a clear error at
-  // construction rather than silently falling back.
-  const name = (raw ? raw : searxngUrl ? 'searxng' : 'brave') as SearchProviderName;
+  // SearXNG is the only backend. An explicit non-searxng value is preserved so
+  // construction throws a clear error instead of pretending it was honoured.
+  const name = (raw ? raw : 'searxng') as SearchProviderName;
   return {
     name,
-    braveApiKey: env.BRAVE_SEARCH_API_KEY?.trim() || undefined,
-    searxngUrl,
+    searxngUrl: env.SEARXNG_URL?.trim() || undefined,
     searxngToken: env.SEARXNG_AUTH_TOKEN?.trim() || undefined,
   };
 }

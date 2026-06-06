@@ -79,7 +79,7 @@ describe.skipIf(!DATABASE_URL)('SdrDrafterController (integration)', () => {
       );
     }
     process.env.ANTHROPIC_API_KEY = 'test-anthropic-key';
-    process.env.BRAVE_SEARCH_API_KEY = 'test-brave-key';
+    process.env.SEARXNG_URL = 'http://searxng.test';
     process.env.CREDENTIAL_MASTER_KEY = Buffer.from(
       new Uint8Array(32).fill(7),
     ).toString('base64');
@@ -405,7 +405,7 @@ describe.skipIf(!DATABASE_URL)('SdrDrafterController (integration)', () => {
     });
 
     // Intercept the global fetch — the runtime tools resolve globalThis.fetch
-    // lazily so this is sufficient. web_search hits api.search.brave.com,
+    // lazily so this is sufficient. web_search hits the SearXNG instance,
     // fetch_url hits the result URL.
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: string | URL | Request) => {
@@ -415,18 +415,16 @@ describe.skipIf(!DATABASE_URL)('SdrDrafterController (integration)', () => {
           : input instanceof URL
             ? input.toString()
             : input.url;
-      if (url.startsWith('https://api.search.brave.com')) {
+      if (url.startsWith('http://searxng.test')) {
         return new Response(
           JSON.stringify({
-            web: {
-              results: [
-                {
-                  title: 'Beta — homepage',
-                  url: 'https://beta.example/about',
-                  description: 'Beta builds healthcare scheduling.',
-                },
-              ],
-            },
+            results: [
+              {
+                title: 'Beta — homepage',
+                url: 'https://beta.example/about',
+                content: 'Beta builds healthcare scheduling.',
+              },
+            ],
           }),
           {
             status: 200,

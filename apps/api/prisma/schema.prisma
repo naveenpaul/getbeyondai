@@ -525,6 +525,11 @@ model ProspectSearch {
   sourcing    Json? // SourcingConfig | null
   budgetCents Int?
   icpCriteria Json? // IcpCriteriaInput | null
+  // The companies discovery surfaced (DiscoveredCompany[]), persisted so the
+  // "companies found" step survives a reload — this is the full pool BEFORE
+  // qualify drops the low-fit ones, so it can't be reconstructed from the
+  // persisted Prospect rows. null until sourcing yields a non-empty pool.
+  discoveredCompanies Json? // DiscoveredCompany[] | null
   createdBy   String // userId
   createdAt   DateTime             @default(now())
   updatedAt   DateTime             @updatedAt

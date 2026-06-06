@@ -11,10 +11,9 @@ import { searchProviderFromEnv } from '../search/registry';
  * Citation rows (the snippet alone isn't a citation — the model still needs to
  * fetch the page to ground a claim).
  *
- * The engine is swappable behind the `SearchProvider` seam: `brave` (Brave
- * Search API, the Cloud default) or `searxng` (self-hosted, keyless — the
- * self-host default), selected via `SEARCH_PROVIDER` / `SEARXNG_URL`. This tool
- * owns only the model-facing contract (name, schema, output shape); WHICH engine
+ * The engine sits behind the `SearchProvider` seam: `searxng` (self-hosted,
+ * keyless) is the only backend, configured via `SEARXNG_URL`. This tool owns
+ * only the model-facing contract (name, schema, output shape); WHICH engine
  * serves the query is the provider's concern. See
  * docs/plans/search-provider-abstraction.md.
  */

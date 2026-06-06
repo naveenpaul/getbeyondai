@@ -4,17 +4,10 @@ import {
   resolveSearchProviderConfig,
   searchProviderFromEnv,
 } from './registry';
-import { BraveSearchProvider } from './providers/brave.provider';
 import { SearxngSearchProvider } from './providers/searxng.provider';
 import { SearchProviderError } from './search-provider';
 
 describe('createSearchProvider', () => {
-  it('builds a Brave provider', () => {
-    expect(createSearchProvider({ name: 'brave', braveApiKey: 'k' })).toBeInstanceOf(
-      BraveSearchProvider,
-    );
-  });
-
   it('builds a SearXNG provider when a URL is given', () => {
     expect(
       createSearchProvider({ name: 'searxng', searxngUrl: 'http://searxng:8080' }),
@@ -29,13 +22,13 @@ describe('createSearchProvider', () => {
 
   it('throws a clear error for an unknown provider name', () => {
     expect(() =>
-      createSearchProvider({ name: 'bing' as 'brave' }),
+      createSearchProvider({ name: 'bing' as 'searxng' }),
     ).toThrow(SearchProviderError);
   });
 });
 
 describe('resolveSearchProviderConfig', () => {
-  it('honors an explicit SEARCH_PROVIDER', () => {
+  it('honors an explicit SEARCH_PROVIDER=searxng', () => {
     const cfg = resolveSearchProviderConfig({
       SEARCH_PROVIDER: 'searxng',
       SEARXNG_URL: 'http://s:8080',
@@ -44,24 +37,19 @@ describe('resolveSearchProviderConfig', () => {
     expect(cfg.searxngUrl).toBe('http://s:8080');
   });
 
-  it('infers searxng when SEARXNG_URL is set but no explicit provider', () => {
+  it('defaults to searxng when no provider is named', () => {
     const cfg = resolveSearchProviderConfig({
       SEARXNG_URL: 'http://s:8080',
     } as NodeJS.ProcessEnv);
     expect(cfg.name).toBe('searxng');
+    expect(cfg.searxngUrl).toBe('http://s:8080');
   });
 
-  it('defaults to brave when nothing is configured', () => {
-    expect(resolveSearchProviderConfig({} as NodeJS.ProcessEnv).name).toBe('brave');
-  });
-
-  it('passes the brave key + searxng token through', () => {
+  it('passes the searxng token through', () => {
     const cfg = resolveSearchProviderConfig({
-      SEARCH_PROVIDER: 'brave',
-      BRAVE_SEARCH_API_KEY: 'bk',
+      SEARXNG_URL: 'http://s:8080',
       SEARXNG_AUTH_TOKEN: 'st',
     } as NodeJS.ProcessEnv);
-    expect(cfg.braveApiKey).toBe('bk');
     expect(cfg.searxngToken).toBe('st');
   });
 
@@ -74,17 +62,17 @@ describe('resolveSearchProviderConfig', () => {
 });
 
 describe('searchProviderFromEnv', () => {
-  it('builds the env-configured provider', () => {
-    expect(
-      searchProviderFromEnv({
-        SEARCH_PROVIDER: 'brave',
-        BRAVE_SEARCH_API_KEY: 'k',
-      } as NodeJS.ProcessEnv),
-    ).toBeInstanceOf(BraveSearchProvider);
+  it('builds the env-configured SearXNG provider', () => {
     expect(
       searchProviderFromEnv({
         SEARXNG_URL: 'http://searxng:8080',
       } as NodeJS.ProcessEnv).name,
     ).toBe('searxng');
+  });
+
+  it('throws when SEARXNG_URL is missing', () => {
+    expect(() => searchProviderFromEnv({} as NodeJS.ProcessEnv)).toThrow(
+      /requires SEARXNG_URL/,
+    );
   });
 });

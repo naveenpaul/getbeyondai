@@ -1,5 +1,6 @@
 import type {
   ProspectSearchEvent,
+  DiscoveredCompany,
   IcpSummary,
   QualifiedProspect,
   RunEvent,
@@ -59,6 +60,19 @@ export function sourcingCompleted(
     prospectSearchId,
     at: nowIso(),
     data: { summary, prospectCount },
+  };
+}
+
+export function companiesDiscovered(
+  prospectSearchId: string,
+  companies: DiscoveredCompany[],
+  total: number,
+): ProspectSearchEvent {
+  return {
+    type: 'companies_discovered',
+    prospectSearchId,
+    at: nowIso(),
+    data: { companies, total },
   };
 }
 

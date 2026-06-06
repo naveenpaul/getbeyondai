@@ -29,7 +29,7 @@ describe.skipIf(!DATABASE_URL)('Org invites + acceptance', () => {
     ).toString('base64');
     process.env.AUTH_SECRET ||= 'test-auth-secret-32-chars-padding-to-match';
     process.env.ANTHROPIC_API_KEY ||= 'test-anthropic-key';
-    process.env.BRAVE_SEARCH_API_KEY ||= 'test-brave-key';
+    process.env.SEARXNG_URL ||= 'http://searxng.test';
 
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],

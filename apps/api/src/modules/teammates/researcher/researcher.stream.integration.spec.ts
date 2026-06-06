@@ -137,7 +137,7 @@ describe.skipIf(!DATABASE_URL)(
         );
       }
       process.env.ANTHROPIC_API_KEY = 'test-anthropic-key';
-      process.env.BRAVE_SEARCH_API_KEY = 'test-brave-key';
+      process.env.SEARXNG_URL = 'http://searxng.test';
       process.env.CREDENTIAL_MASTER_KEY = Buffer.from(
         new Uint8Array(32).fill(7),
       ).toString('base64');
@@ -229,13 +229,9 @@ describe.skipIf(!DATABASE_URL)(
       const alice = await createTestSession(prisma, auth, 'alice@test.com');
       scriptFetch([
         (url) =>
-          url.startsWith('https://api.search.brave.com')
+          url.startsWith('http://searxng.test')
             ? jsonResponse({
-                web: {
-                  results: [
-                    { title: 'Acme', url: 'https://acme.example' },
-                  ],
-                },
+                results: [{ title: 'Acme', url: 'https://acme.example' }],
               })
             : null,
         (url) =>
@@ -339,8 +335,8 @@ describe.skipIf(!DATABASE_URL)(
       // give the worker a head start.
       scriptFetch([
         (url) =>
-          url.startsWith('https://api.search.brave.com')
-            ? jsonResponse({ web: { results: [] } })
+          url.startsWith('http://searxng.test')
+            ? jsonResponse({ results: [] })
             : null,
       ]);
 

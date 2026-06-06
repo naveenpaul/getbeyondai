@@ -23,7 +23,7 @@ import {
  *   - Default model: claude-sonnet-4-6 — Researcher needs reasoning over
  *     citations, not Haiku's speed.
  *   - Default budget: $0.50 per run (50¢). Designed to hold under the
- *     plan's <$0.10 Brave + ~$0.40 model spend target.
+ *     plan's <$0.10 search + ~$0.40 model spend target.
  *   - Bounds: maxToolCalls=20 (enough for 10 search/fetch pairs +
  *     emit_draft retries), maxWallSecs=120 (Researcher is async, not
  *     interactive — 2 min is fine).
@@ -55,7 +55,7 @@ export interface ResearchInput {
 export interface ResearchDeps {
   prisma: PrismaClient;
   llm: LlmProvider;
-  /** Optional tool overrides for tests (default: brave + fetch). */
+  /** Optional tool overrides for tests (default: web_search + fetch). */
   tools?: AgentTool[];
   /**
    * Optional progress callback. The async worker wires this to the

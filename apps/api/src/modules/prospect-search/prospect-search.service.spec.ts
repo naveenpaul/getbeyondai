@@ -524,6 +524,42 @@ describe('ProspectSearchService.detail', () => {
     // No draft ids → draft.findMany short-circuits (not called).
     expect(draftFindMany).not.toHaveBeenCalled();
   });
+
+  it('returns the persisted discovered companies, dropping malformed rows', async () => {
+    const prospectSearch = {
+      ...baseProspectSearch,
+      discoveredCompanies: [
+        { name: 'Acme', domain: 'acme.com' },
+        { name: 'Globex', domain: null },
+        { domain: 'noname.com' }, // dropped — no name
+        'garbage', // dropped — not an object
+        { name: 'Initech', domain: 42 }, // domain coerced to null
+      ],
+    };
+    const { service } = makeService({
+      prospectSearch: { findUnique: vi.fn(async () => prospectSearch) },
+      draft: { findMany: vi.fn(async () => []) },
+      agentRun: { findFirst: vi.fn(async () => null) },
+    });
+
+    const result = await service.detail('org-1', 'c1');
+    expect(result.discoveredCompanies).toEqual([
+      { name: 'Acme', domain: 'acme.com' },
+      { name: 'Globex', domain: null },
+      { name: 'Initech', domain: null },
+    ]);
+  });
+
+  it('returns an empty discovered-companies list when none persisted', async () => {
+    const { service } = makeService({
+      prospectSearch: { findUnique: vi.fn(async () => baseProspectSearch) },
+      draft: { findMany: vi.fn(async () => []) },
+      agentRun: { findFirst: vi.fn(async () => null) },
+    });
+
+    const result = await service.detail('org-1', 'c1');
+    expect(result.discoveredCompanies).toEqual([]);
+  });
 });
 
 describe('deriveTitle', () => {

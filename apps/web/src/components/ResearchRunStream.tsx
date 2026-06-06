@@ -168,7 +168,8 @@ function collapseEvents(events: RunEvent[]): CollapsedRow[] {
 }
 
 function describeToolStart(toolName: string, args: unknown): string {
-  if (toolName === 'brave_search') {
+  // 'brave_search' is the legacy tool name kept for historical AgentRun records.
+  if (toolName === 'web_search' || toolName === 'brave_search') {
     const q = (args as { query?: string } | undefined)?.query;
     return q ? `Searching for "${q}"…` : 'Searching…';
   }
@@ -185,7 +186,7 @@ function describeToolDone(toolName: string, isError: boolean): string {
     if (toolName === 'emit_draft') return 'Draft rejected — retrying';
     return `${toolName} failed`;
   }
-  if (toolName === 'brave_search') return 'Got results';
+  if (toolName === 'web_search' || toolName === 'brave_search') return 'Got results';
   if (toolName === 'fetch_url') return 'Fetched';
   if (toolName === 'emit_draft') return 'Draft accepted';
   return toolName;

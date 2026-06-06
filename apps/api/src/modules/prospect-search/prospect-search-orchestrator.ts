@@ -38,6 +38,7 @@ import {
   searchStarted,
   prospectQualified,
   icpDerived,
+  companiesDiscovered,
   sourcingCompleted,
   sourcingStarted,
   toolActivity,
@@ -365,6 +366,32 @@ export class ProspectSearchOrchestrator {
           sourced.candidates.length,
         ),
       );
+
+      // Surface the discovered companies themselves (name + domain) — not just
+      // the count — so the UI's discovery step shows every company the source
+      // found, including ones qualify later drops below the fit threshold (which
+      // never become `prospect_qualified` cards). Skip when the pool is empty.
+      // Persisted on the search at discovery time (not run end) so the step
+      // survives a reload even if a later stage fails.
+      if (sourced.candidates.length > 0) {
+        const discovered = sourced.candidates.map((c) => ({
+          name: c.name,
+          domain: c.domain,
+        }));
+        await this.deps.prisma.prospectSearch.update({
+          where: { id: prospectSearchId },
+          data: {
+            discoveredCompanies: discovered as unknown as Prisma.InputJsonValue,
+          },
+        });
+        this.deps.emitEvent(
+          companiesDiscovered(
+            prospectSearchId,
+            discovered,
+            sourced.candidates.length,
+          ),
+        );
+      }
 
       // ── 2.5. Enrich firmographics (optional, best-effort) ───────────
       // Backfill the nulls a CSV/ContactList pool leaves — domain (a sharper

@@ -1,13 +1,14 @@
 'use client';
 
 import {
+  Building2,
   Check,
   CircleAlert,
   Compass,
   Loader2,
   Sparkles,
 } from 'lucide-react';
-import type { QualifiedProspect } from '@getbeyond/shared';
+import type { DiscoveredCompany, QualifiedProspect } from '@getbeyond/shared';
 import { Badge } from '@/components/ui/badge';
 import { CitationChip } from '@/components/CitationChip';
 import { cn } from '@/lib/utils';
@@ -89,6 +90,8 @@ function TranscriptRow({ row }: { row: ProspectSearchRow }): React.JSX.Element {
           isError={row.isError}
         />
       );
+    case 'discovered':
+      return <DiscoveredCompanies companies={row.companies} total={row.total} />;
     case 'prospect':
       return (
         <ProspectCard
@@ -150,6 +153,51 @@ function FeedLine({
           <span className="text-xs text-muted-foreground">{secondary}</span>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The discovery-step output: every company the source (e.g. SearXNG) found,
+ * shown before qualify/scoring narrows the pool. This is deliberately the full
+ * list — companies dropped below the fit threshold never become ProspectCards,
+ * so without this the user would never see them.
+ */
+function DiscoveredCompanies({
+  companies,
+  total,
+}: {
+  companies: DiscoveredCompany[];
+  total: number;
+}): React.JSX.Element {
+  return (
+    <div className="rounded-lg border bg-card p-4">
+      <div className="flex items-baseline gap-2">
+        <Building2 className="h-3.5 w-3.5 self-center text-muted-foreground" />
+        <span className="text-sm font-medium text-foreground">
+          Companies found
+        </span>
+        <Badge variant="secondary" className="tabular-nums">
+          {total}
+        </Badge>
+      </div>
+      {companies.length > 0 ? (
+        <ul className="mt-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+          {companies.map((c, i) => (
+            <li
+              key={`${c.domain ?? c.name}-${i}`}
+              className="flex flex-wrap items-baseline gap-x-2 text-sm"
+            >
+              <span className="text-foreground">{c.name}</span>
+              {c.domain ? (
+                <span className="truncate font-mono text-xs text-muted-foreground">
+                  {c.domain}
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }

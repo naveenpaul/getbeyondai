@@ -10,6 +10,7 @@ import type {
   ProspectSearchSummary,
   CreateProspectSearchRequest,
   CreateProspectSearchResponse,
+  DiscoveredCompany,
   IcpCriteriaInput,
   IcpSummary,
   QualifiedProspect,
@@ -202,6 +203,9 @@ export class ProspectSearchService {
     return {
       prospectSearch: toSummary(prospectSearch, prospectSearch._count.prospects),
       icp,
+      discoveredCompanies: parseDiscoveredCompanies(
+        prospectSearch.discoveredCompanies,
+      ),
       prospects,
     };
   }
@@ -259,6 +263,30 @@ export class ProspectSearchService {
     if (!icp || typeof icp !== 'object') return null;
     return icp as unknown as IcpSummary;
   }
+}
+
+/**
+ * Parse the persisted `discoveredCompanies` JSON back into the typed shape.
+ * Defensive: the column is untyped JSON, so we validate the array + each row's
+ * `name` (required) and `domain` (string | null), dropping anything malformed
+ * rather than trusting the blob. Returns `[]` for null / non-array / all-junk.
+ */
+function parseDiscoveredCompanies(value: unknown): DiscoveredCompany[] {
+  if (!Array.isArray(value)) return [];
+  const out: DiscoveredCompany[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as Record<string, unknown>;
+    if (typeof row.name !== 'string') continue;
+    const domain =
+      typeof row.domain === 'string'
+        ? row.domain
+        : row.domain === null
+          ? null
+          : null;
+    out.push({ name: row.name, domain });
+  }
+  return out;
 }
 
 /** Map a ProspectSearch row (+ prospect count) to the public summary shape. */

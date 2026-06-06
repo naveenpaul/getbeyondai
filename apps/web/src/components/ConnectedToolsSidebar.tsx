@@ -61,7 +61,7 @@ const RUNTIME_TOOLS: readonly ToolEntry[] = [
   {
     icon: Search,
     name: 'Web search',
-    detail: 'Brave Search · finds firmographic signals',
+    detail: 'SearXNG · finds firmographic signals',
   },
   {
     icon: Globe,

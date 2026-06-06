@@ -180,7 +180,24 @@ export interface QualifiedProspect {
 export interface ProspectSearchDetailResponse {
   prospectSearch: ProspectSearchSummary;
   icp: IcpSummary | null;
+  /**
+   * Every company discovery surfaced, persisted so the "companies found" step
+   * survives a reload (the full pool before qualify drops the low-fit ones).
+   * Empty when the search hasn't reached a non-empty discovery yet.
+   */
+  discoveredCompanies: DiscoveredCompany[];
   prospects: QualifiedProspect[];
+}
+
+/**
+ * A company surfaced by discovery, BEFORE qualify/scoring narrows the pool.
+ * Carried on `companies_discovered` so the UI can always show every company the
+ * source (e.g. SearXNG) found — including ones later dropped below the fit
+ * threshold, which never become `prospect_qualified` cards.
+ */
+export interface DiscoveredCompany {
+  name: string;
+  domain: string | null;
 }
 
 // ─── SSE stream events (GET /prospect-searches/:id/stream) ──────────
@@ -193,6 +210,7 @@ export type ProspectSearchEventType =
   | 'icp_derived'
   | 'sourcing_started'
   | 'sourcing_completed'
+  | 'companies_discovered'
   | 'prospect_qualified'
   | 'search_completed'
   | 'search_failed'
@@ -213,6 +231,10 @@ export type ProspectSearchEvent =
   | (BaseProspectSearchEvent & {
       type: 'sourcing_completed';
       data: { summary: string; prospectCount: number };
+    })
+  | (BaseProspectSearchEvent & {
+      type: 'companies_discovered';
+      data: { companies: DiscoveredCompany[]; total: number };
     })
   | (BaseProspectSearchEvent & {
       type: 'prospect_qualified';
