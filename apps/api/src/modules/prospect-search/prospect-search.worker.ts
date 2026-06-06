@@ -58,8 +58,15 @@ import {
 import {
   ProspectSearchOrchestrator,
   PROSPECT_SEARCH_TEAMMATE,
+  PROSPECT_SEARCH_DEFAULTS,
   CONTACT_SOURCING_DEFAULTS,
+  extractText,
 } from './prospect-search-orchestrator';
+import { callModel } from '../teammates/runtime/call-model';
+import { searchProviderFromEnv } from '../teammates/runtime/search/registry';
+import { SearchDiscoverySourcingProvider } from '../connectors/sourcing/search-discovery.provider';
+import { resolveDomainViaSearch } from '../connectors/sourcing/domain-resolver';
+import type { WinKey } from '../connectors/sourcing/exclude-wins';
 import type { ConnectorKind } from '@getbeyond/shared';
 import { searchFailed, toBusEvent } from './prospect-search-events';
 
@@ -135,6 +142,60 @@ export class ProspectSearchWorker implements OnModuleInit {
             this.prisma,
             data.orgId,
           );
+
+          // ── Search-discovery wiring (Phase B) ──────────────────────────────
+          // Win companies: lookalike exemplars for query building + the
+          // exclude-wins suppression set (names only — Contact has no domain).
+          const winKeys = data.winsListId
+            ? await loadWinKeys(this.prisma, data.orgId, data.winsListId)
+            : [];
+          // The two discovery LLM calls (query build + normalize) ride ONE
+          // audited `news_discovery` AgentRun, minted lazily on first use and
+          // capped by the per-search budget (invariants #3/#8). It's finalized
+          // in the finally below so the stale-run reaper never touches it.
+          const searcher = searchProviderFromEnv();
+          let newsRunId: string | null = null;
+          const discoveryChat = async (
+            systemPrompt: string,
+            userPrompt: string,
+          ): Promise<string> => {
+            if (!newsRunId) {
+              const run = await this.prisma.agentRun.create({
+                data: {
+                  orgId: data.orgId,
+                  teammate: PROSPECT_SEARCH_TEAMMATE,
+                  triggeredBy: data.triggeredBy,
+                  status: 'running',
+                  inputContext: {
+                    phase: 'news_discovery',
+                    prospectSearchId: data.prospectSearchId,
+                  },
+                },
+              });
+              newsRunId = run.id;
+            }
+            const res = await callModel(this.prisma, provider, {
+              runId: newsRunId,
+              // Extraction-dominant step → the fast model (cite-or-abstain keeps
+              // it honest); ICP derivation + scoring stay on modelPrimary.
+              modelName: modelFast,
+              systemPrompt,
+              messages: [{ role: 'user', content: [{ type: 'text', text: userPrompt }] }],
+              budgetCents: data.budgetCents ?? PROSPECT_SEARCH_DEFAULTS.budgetCents,
+              maxTokens: PROSPECT_SEARCH_DEFAULTS.maxTokens,
+            });
+            return extractText(res.message.content);
+          };
+          const buildSearchDiscovery = (): SourcingProvider =>
+            new SearchDiscoverySourcingProvider({
+              searcher,
+              chat: discoveryChat,
+              resolveDomain: (name: string) => resolveDomainViaSearch(searcher, name),
+              winNames: winKeys.map((w) => w.name),
+              winKeys,
+              intent: data.goal,
+            });
+
           const orchestrator = new ProspectSearchOrchestrator({
             prisma: this.prisma,
             llm: provider,
@@ -150,6 +211,11 @@ export class ProspectSearchWorker implements OnModuleInit {
                 undefined,
                 undefined,
                 icp,
+                undefined,
+                // Search-discovery is the auto-discovery front-end; consulted
+                // only when no explicit source is attached (buildSourcingProvider
+                // returns early for an explicit provider before the chain).
+                buildSearchDiscovery,
               ),
             buildEnrichmentProvider: (orgId) =>
               buildEnrichmentProvider(this.prisma, this.credentials, orgId),
@@ -166,24 +232,38 @@ export class ProspectSearchWorker implements OnModuleInit {
             emitEvent: (event: ProspectSearchEvent) =>
               this.eventBus.publish(toBusEvent(event)),
           });
-          const result = await orchestrator.run({
-            prospectSearchId: data.prospectSearchId,
-            orgId: data.orgId,
-            triggeredBy: data.triggeredBy,
-            goal: data.goal,
-            winsListId: data.winsListId,
-            icpCriteria: data.icpCriteria,
-            contactThreshold: sourcingConfig.threshold,
-            modelName: modelPrimary,
-            // Per-candidate research runs on the fast model (cost-dominant);
-            // ICP derivation + scoring use modelPrimary for judgment quality.
-            researchModelName: modelFast,
-            budgetCents: data.budgetCents,
-          });
-          this.logger.log(
-            `completed prospect-search-run job ${job.id}: status=${result.status} ` +
-              `prospects=${result.prospectCount} cost=${result.costCents}¢`,
-          );
+          try {
+            const result = await orchestrator.run({
+              prospectSearchId: data.prospectSearchId,
+              orgId: data.orgId,
+              triggeredBy: data.triggeredBy,
+              goal: data.goal,
+              winsListId: data.winsListId,
+              icpCriteria: data.icpCriteria,
+              contactThreshold: sourcingConfig.threshold,
+              modelName: modelPrimary,
+              // Per-candidate research runs on the fast model (cost-dominant);
+              // ICP derivation + scoring use modelPrimary for judgment quality.
+              researchModelName: modelFast,
+              budgetCents: data.budgetCents,
+            });
+            this.logger.log(
+              `completed prospect-search-run job ${job.id}: status=${result.status} ` +
+                `prospects=${result.prospectCount} cost=${result.costCents}¢`,
+            );
+          } finally {
+            // Finalize the news_discovery run (if search-discovery ran) so the
+            // stale-run reaper never touches it. Best-effort: a failure here must
+            // not mask the run's own outcome.
+            if (newsRunId) {
+              await this.prisma.agentRun
+                .update({
+                  where: { id: newsRunId },
+                  data: { status: 'completed', completedAt: new Date() },
+                })
+                .catch(() => undefined);
+            }
+          }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.eventBus.publish(
@@ -250,6 +330,14 @@ export async function buildSourcingProvider(
   icp: IcpCriteria = ICP_NONE,
   // Injectable for tests; production uses the registered PDL adapter singleton.
   pdlAdapter: PdlCompanySearcher = pdlSourceAdapter,
+  /**
+   * Builds the keyless search-discovery provider (Phase B), or null when it
+   * can't run. Prepended to the auto-discovery chain as the FRONT-END (it finds
+   * companies the structured vendors can't, e.g. recently-funded). The worker
+   * composes it with searxng + a callModel-backed chat + the wins; tests omit
+   * it. Only used in auto-discovery (an explicit source is run alone).
+   */
+  buildSearchDiscovery?: () => SourcingProvider | null,
 ): Promise<SourcingProvider | null> {
   if (sourcing?.provider === 'contact_list') {
     return new ContactListSourcingProvider(prisma, orgId, sourcing.listId);
@@ -330,6 +418,11 @@ export async function buildSourcingProvider(
             );
     if (provider) chain.push(provider);
   }
+  // Search-discovery is the front-end (F2): it leads the chain so it runs first,
+  // and the FallbackSourcingProvider falls through to the vendors when it returns
+  // empty / is unavailable (the empty-fallthrough fix). Keyless + Cloud-safe.
+  const searchDiscovery = buildSearchDiscovery?.() ?? null;
+  if (searchDiscovery) chain.unshift(searchDiscovery);
   if (chain.length === 0) return null;
   return chain.length === 1 ? chain[0]! : new FallbackSourcingProvider(chain);
 }
@@ -663,4 +756,37 @@ async function buildOneContactSourcer(
     };
   }
   return null;
+}
+
+/** Cap on wins loaded for exemplars + exclude-wins (exemplars are further capped to 5). */
+const WINS_LOAD_LIMIT = 200;
+
+/**
+ * Load the org's win companies (names) from the wins ContactList for
+ * search-discovery: lookalike exemplars for query building + the exclude-wins
+ * suppression set. Org-scoped through the list (a cross-org listId matches no
+ * rows). Deduped case-insensitively; `Contact` has no domain column, so the
+ * keys are name-only (exclude-wins matches on name in that case).
+ */
+async function loadWinKeys(
+  prisma: PrismaService,
+  orgId: string,
+  winsListId: string,
+): Promise<WinKey[]> {
+  const members = await prisma.contactListMember.findMany({
+    where: { listId: winsListId, list: { orgId } },
+    include: { contact: { select: { company: true } } },
+    take: WINS_LOAD_LIMIT,
+  });
+  const seen = new Set<string>();
+  const out: WinKey[] = [];
+  for (const m of members) {
+    const company = (m.contact.company ?? '').trim();
+    if (!company) continue;
+    const key = company.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name: company });
+  }
+  return out;
 }

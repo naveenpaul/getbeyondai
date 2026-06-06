@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { PrismaService } from '../../common/prisma/prisma.service';
 import {
   CredentialManager,
@@ -523,6 +523,45 @@ describe('buildSourcingProvider — PDL + geo-aware routing', () => {
         undefined, undefined, fakeZi, icp(['Bengaluru']), fakePdl,
       ),
     ).toBeNull();
+  });
+
+  it('prepends search-discovery as the auto-discovery front-end (F2)', async () => {
+    const prisma = prismaWithKinds(new Set(['pdl']));
+    const fakeSearchDiscovery = { name: 'search-discovery', findCandidates: vi.fn() };
+    const provider = await buildSourcingProvider(
+      prisma, creds, 'org-1', null,
+      undefined, undefined, fakeZi, icp(['Bengaluru']), fakePdl,
+      () => fakeSearchDiscovery,
+    );
+    expect(provider).toBeInstanceOf(FallbackSourcingProvider);
+    // Search-discovery leads; PDL follows as the fallback when it returns empty.
+    expect((provider as FallbackSourcingProvider).providers.map((p) => p.name)).toEqual([
+      'search-discovery',
+      'pdl',
+    ]);
+  });
+
+  it('returns search-discovery alone when no vendor is connected', async () => {
+    const prisma = prismaWithKinds(new Set()); // no vendors
+    const fakeSearchDiscovery = { name: 'search-discovery', findCandidates: vi.fn() };
+    const provider = await buildSourcingProvider(
+      prisma, creds, 'org-1', null,
+      undefined, undefined, fakeZi, icp(['Bengaluru']), fakePdl,
+      () => fakeSearchDiscovery,
+    );
+    expect(provider).toBe(fakeSearchDiscovery);
+  });
+
+  it('does NOT consult search-discovery for an explicit source (run alone)', async () => {
+    const prisma = prismaWithKinds(new Set(['pdl']));
+    const factory = vi.fn(() => ({ name: 'search-discovery', findCandidates: vi.fn() }));
+    const provider = await buildSourcingProvider(
+      prisma, creds, 'org-1', { provider: 'pdl' },
+      undefined, undefined, fakeZi, icp(['Bengaluru']), fakePdl,
+      factory,
+    );
+    expect(provider).toBeInstanceOf(PdlSourcingProvider);
+    expect(factory).not.toHaveBeenCalled();
   });
 });
 
