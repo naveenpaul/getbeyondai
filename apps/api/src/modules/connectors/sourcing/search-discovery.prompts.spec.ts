@@ -4,6 +4,7 @@ import {
   MAX_EXEMPLARS,
   buildDiscoveryQueryUserPrompt,
   buildNormalizeUserPrompt,
+  isListShaped,
   parseDiscoveredCompanies,
   parseDiscoveryQueries,
   selectExemplars,
@@ -134,6 +135,51 @@ describe('prompt builders', () => {
     expect(p).toContain('[1] Propsoch raises $2M');
     expect(p).toContain('url: https://n.com/a');
     expect(p).toContain('date: 2026-04-29');
+  });
+
+  it('normalize prompt appends fetched list pages to mine, when given', () => {
+    const p = buildNormalizeUserPrompt(
+      [{ title: 'x', url: 'https://n.com/a', description: 'y', age: null }],
+      [
+        {
+          url: 'https://list.com/top',
+          title: 'Top 29 Bangalore Startups',
+          text: 'Signzy, Slice, Razorpay, …',
+        },
+      ],
+    );
+    expect(p).toContain('List pages');
+    expect(p).toContain('[LIST 1] Top 29 Bangalore Startups');
+    expect(p).toContain('Signzy, Slice, Razorpay');
+  });
+
+  it('omits the list-pages section when none are fetched', () => {
+    const p = buildNormalizeUserPrompt([
+      { title: 'x', url: 'https://n.com/a', description: 'y', age: null },
+    ]);
+    expect(p).not.toContain('List pages');
+  });
+});
+
+describe('isListShaped', () => {
+  it('flags "top N", "N+ startups", "best/leading", "list of", "to watch", roundups', () => {
+    const yes = [
+      { title: 'Top 29 Bangalore Startups', description: '' },
+      { title: '505+ Funded Bangalore Startups 2026', description: 'verified' },
+      { title: 'Best fintech startups in India', description: '' },
+      { title: 'A list of early stage startups in Karnataka', description: '' },
+      { title: 'Startups to watch in 2026', description: '' },
+      { title: 'Bengaluru ecosystem', description: 'league table of companies' },
+    ];
+    for (const h of yes) expect(isListShaped(h)).toBe(true);
+  });
+
+  it('does not flag a single-company page/news hit', () => {
+    const no = [
+      { title: 'Signzy — fraud-prevention APIs', description: 'Signzy homepage' },
+      { title: 'Acme raises $2M seed', description: 'funding news' },
+    ];
+    for (const h of no) expect(isListShaped(h)).toBe(false);
   });
 
   it('handles empty ICP lists gracefully', () => {

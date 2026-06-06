@@ -64,6 +64,7 @@ import {
 } from './prospect-search-orchestrator';
 import { callModel } from '../teammates/runtime/call-model';
 import { searchProviderFromEnv } from '../teammates/runtime/search/registry';
+import { contentProviderFromEnv } from '../teammates/runtime/content/registry';
 import { SearchDiscoverySourcingProvider } from '../connectors/sourcing/search-discovery.provider';
 import { resolveDomainViaSearch } from '../connectors/sourcing/domain-resolver';
 import type { WinKey } from '../connectors/sourcing/exclude-wins';
@@ -71,6 +72,14 @@ import type { ConnectorKind } from '@getbeyond/shared';
 import { searchFailed, toBusEvent } from './prospect-search-events';
 
 export const PROSPECT_SEARCH_RUN_QUEUE = 'prospect-search-run';
+
+/**
+ * Output-token cap for the discovery query-build + normalize calls. Higher than
+ * the ICP/scoring cap because normalize can emit up to MAX_NORMALIZE_COMPANIES
+ * rows when mining a list page; too low truncates the STRICT-JSON mid-array and
+ * the parser yields zero companies.
+ */
+const DISCOVERY_NORMALIZE_MAX_TOKENS = 2048;
 
 /**
  * pg-boss consumer for prospectSearch orchestrator runs.
@@ -154,6 +163,7 @@ export class ProspectSearchWorker implements OnModuleInit {
           // capped by the per-search budget (invariants #3/#8). It's finalized
           // in the finally below so the stale-run reaper never touches it.
           const searcher = searchProviderFromEnv();
+          const content = contentProviderFromEnv();
           let newsRunId: string | null = null;
           const discoveryChat = async (
             systemPrompt: string,
@@ -182,7 +192,11 @@ export class ProspectSearchWorker implements OnModuleInit {
               systemPrompt,
               messages: [{ role: 'user', content: [{ type: 'text', text: userPrompt }] }],
               budgetCents: data.budgetCents ?? PROSPECT_SEARCH_DEFAULTS.budgetCents,
-              maxTokens: PROSPECT_SEARCH_DEFAULTS.maxTokens,
+              // Higher cap than ICP/scoring: normalize can emit up to
+              // MAX_NORMALIZE_COMPANIES rows when a mined list page names many
+              // startups — a 1024 cap would truncate the JSON mid-array and the
+              // parser would yield zero companies.
+              maxTokens: DISCOVERY_NORMALIZE_MAX_TOKENS,
             });
             return extractText(res.message.content);
           };
@@ -190,7 +204,20 @@ export class ProspectSearchWorker implements OnModuleInit {
             new SearchDiscoverySourcingProvider({
               searcher,
               chat: discoveryChat,
+              // Mine list/roundup pages for the companies they name (the answer
+              // to "top startups in X" is in the page body, not the snippet).
+              fetchPage: async (url: string) => {
+                try {
+                  return (await content.fetch(url)).text;
+                } catch {
+                  return null;
+                }
+              },
               resolveDomain: (name: string) => resolveDomainViaSearch(searcher, name),
+              // Keep companies whose domain can't be resolved inline — Stage 2.5
+              // enrichment backfills it; dropping pre-qualify lost most list-
+              // mined companies (their domain rarely appears in list text).
+              dropDomainless: false,
               winNames: winKeys.map((w) => w.name),
               winKeys,
               intent: data.goal,

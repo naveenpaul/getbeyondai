@@ -15,9 +15,11 @@ import {
   DISCOVERY_QUERY_BUILDER_SYSTEM_PROMPT,
   buildDiscoveryQueryUserPrompt,
   buildNormalizeUserPrompt,
+  isListShaped,
   parseDiscoveredCompanies,
   parseDiscoveryQueries,
   selectExemplars,
+  type DiscoveryListPage,
   type RawDiscoveredCompany,
 } from './search-discovery.prompts';
 
@@ -51,8 +53,12 @@ import {
  * domain resolver.
  */
 
-const DEFAULT_PER_QUERY_COUNT = 10;
+const DEFAULT_PER_QUERY_COUNT = 20;
 const DEFAULT_LIMIT = 25;
+/** Max list/roundup pages fetched + mined per run (bounds latency + tokens). */
+const MAX_LIST_FETCHES = 4;
+/** Per-page text cap fed to normalize (keeps the prompt + output bounded). */
+const LIST_PAGE_CHAR_CAP = 4000;
 
 /** Minimal web-search edge (a `SearchProvider`, narrowed for injection). */
 export interface DiscoverySearcher {
@@ -81,6 +87,13 @@ export interface SearchDiscoveryDeps {
   winKeys: readonly WinKey[];
   /** Free-text goal/intent fed to the query builder. */
   intent: string;
+  /**
+   * Fetch a result page's cleaned text (the ContentProvider "URL → text" seam),
+   * used to MINE list/roundup pages for the companies they name — the answer to
+   * "top startups in X" lives in the page body, not the snippet. When omitted,
+   * discovery falls back to snippet-only extraction (its prior behavior).
+   */
+  fetchPage?: (url: string) => Promise<string | null>;
   /** `research`-mode signal questions to weave into queries (empty in B-alone). */
   signalQuestions?: readonly string[];
   /** Recency window in months; when set, stale (older) dated candidates are dropped. */
@@ -159,12 +172,20 @@ export class SearchDiscoverySourcingProvider implements SourcingProvider {
       return { candidates: [], summary: buildSummary(0, 0, 0) };
     }
 
-    // 3. Normalize raw hits → companies (drops funds/ecosystem noise).
+    // 2.5. Mine LIST/roundup pages: a "top N startups in X" hit names many
+    //      companies in its body but only one in its snippet. Fetch the list-
+    //      shaped hits and hand their text to normalize so we harvest the whole
+    //      list, not just the publisher. Best-effort + bounded (review #3): at
+    //      most MAX_LIST_FETCHES pages, each truncated; a fetch failure is
+    //      skipped, never fatal.
+    const listPages = await this.mineListPages(results);
+
+    // 3. Normalize raw hits + mined list pages → companies.
     let raw: RawDiscoveredCompany[];
     try {
       const text = await this.deps.chat(
         DISCOVERY_NORMALIZE_SYSTEM_PROMPT,
-        buildNormalizeUserPrompt(results),
+        buildNormalizeUserPrompt(results, listPages),
       );
       raw = parseDiscoveredCompanies(text);
     } catch (err) {
@@ -195,6 +216,41 @@ export class SearchDiscoverySourcingProvider implements SourcingProvider {
       candidates: deduped,
       summary: buildSummary(deduped.length, raw.length, excluded.length),
     };
+  }
+
+  /**
+   * Fetch + return the text of up to MAX_LIST_FETCHES list-shaped results, so
+   * normalize can mine the companies named inside them. No-op (returns []) when
+   * no `fetchPage` is wired or no result looks like a list. Each fetch is
+   * independent + best-effort: a failure or empty body is skipped, not fatal.
+   */
+  private async mineListPages(
+    results: ReadonlyArray<SearchOutput['results'][number]>,
+  ): Promise<DiscoveryListPage[]> {
+    const fetchPage = this.deps.fetchPage;
+    if (!fetchPage) return [];
+    const targets = results
+      .filter((r) => r.url && isListShaped(r))
+      .slice(0, MAX_LIST_FETCHES);
+    const pages: DiscoveryListPage[] = [];
+    for (const r of targets) {
+      try {
+        const text = await fetchPage(r.url);
+        const trimmed = text?.trim();
+        if (!trimmed) continue;
+        pages.push({
+          url: r.url,
+          title: r.title,
+          text: trimmed.slice(0, LIST_PAGE_CHAR_CAP),
+        });
+      } catch (err) {
+        this.logger.warn(`list-page fetch failed for ${r.url}: ${describe(err)}`);
+      }
+    }
+    if (pages.length) {
+      this.logger.log(`mined ${pages.length} list page(s) for companies`);
+    }
+    return pages;
   }
 
   /** Map raw companies → CandidateCompany, resolving domain inline; drop domainless. */

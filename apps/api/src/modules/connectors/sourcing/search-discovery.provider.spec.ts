@@ -138,6 +138,87 @@ describe('SearchDiscoverySourcingProvider.findCandidates', () => {
     const res = await p.findCandidates(ICP, { limit: 1 });
     expect(res.candidates).toHaveLength(1);
   });
+
+  it('keeps domainless candidates when dropDomainless is false', async () => {
+    const p = new SearchDiscoverySourcingProvider(
+      deps({
+        chat: chatStub('{"companies":[{"name":"NoDomain Co"}]}'),
+        dropDomainless: false,
+        winKeys: [],
+      }),
+    );
+    const res = await p.findCandidates(ICP);
+    expect(res.candidates).toHaveLength(1);
+    expect(res.candidates[0]!.domain).toBeNull();
+  });
+
+  it('mines a list-shaped result: fetches its page + extracts the companies inside', async () => {
+    const searcher = searcherReturning([
+      {
+        title: 'Top 10 Bengaluru startups',
+        url: 'https://list.com/top',
+        description: 'a roundup',
+        age: null,
+      },
+    ]);
+    const fetchPage = vi.fn(async () => 'Companies: Alpha, Beta, Gamma');
+    // Normalize returns the three list companies ONLY when the page text made it
+    // into the prompt — proving the fetched body was mined, not just the snippet.
+    const chat = vi.fn(async (system: string, user: string) => {
+      if (system === DISCOVERY_QUERY_BUILDER_SYSTEM_PROMPT) return QUERIES_JSON;
+      return user.includes('Alpha, Beta, Gamma')
+        ? '{"companies":[{"name":"Alpha","domain":"alpha.com"},{"name":"Beta","domain":"beta.com"},{"name":"Gamma","domain":"gamma.com"}]}'
+        : '{"companies":[]}';
+    });
+    const p = new SearchDiscoverySourcingProvider(
+      deps({ searcher, chat, fetchPage, winKeys: [] }),
+    );
+    const res = await p.findCandidates(ICP);
+    expect(fetchPage).toHaveBeenCalledWith('https://list.com/top');
+    expect(res.candidates.map((c) => c.name).sort()).toEqual([
+      'Alpha',
+      'Beta',
+      'Gamma',
+    ]);
+  });
+
+  it('does not fetch a non-list-shaped (single-company) result', async () => {
+    const searcher = searcherReturning([
+      { title: 'Signzy homepage', url: 'https://signzy.com', description: 'APIs', age: null },
+    ]);
+    const fetchPage = vi.fn(async () => 'irrelevant');
+    const p = new SearchDiscoverySourcingProvider(
+      deps({
+        searcher,
+        fetchPage,
+        chat: chatStub('{"companies":[{"name":"Signzy","domain":"signzy.com"}]}'),
+        winKeys: [],
+      }),
+    );
+    await p.findCandidates(ICP);
+    expect(fetchPage).not.toHaveBeenCalled();
+  });
+
+  it('treats a list-page fetch failure as non-fatal (snippet extraction still runs)', async () => {
+    const searcher = searcherReturning([
+      { title: 'Top 10 startups', url: 'https://list.com/x', description: 'list', age: null },
+    ]);
+    const fetchPage = vi.fn(async () => {
+      throw new Error('fetch boom');
+    });
+    const p = new SearchDiscoverySourcingProvider(
+      deps({
+        searcher,
+        fetchPage,
+        chat: chatStub('{"companies":[{"name":"Snippet Co","domain":"snippet.com"}]}'),
+        winKeys: [],
+      }),
+    );
+    const res = await p.findCandidates(ICP);
+    expect(fetchPage).toHaveBeenCalled();
+    expect(res.candidates).toHaveLength(1);
+    expect(res.candidates[0]!.name).toBe('Snippet Co');
+  });
 });
 
 describe('filterByRecency', () => {

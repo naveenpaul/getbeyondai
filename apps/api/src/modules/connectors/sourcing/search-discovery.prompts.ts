@@ -22,7 +22,14 @@ import type { IcpCriteria } from './sourcing-provider';
 /** Max win companies used as lookalike exemplars in the query prompt. */
 export const MAX_EXEMPLARS = 5;
 /** Max search vectors emitted per discovery run. */
-export const MAX_DISCOVERY_QUERIES = 3;
+export const MAX_DISCOVERY_QUERIES = 5;
+/**
+ * Cap on companies the normalize step may emit. Bounds output tokens so the
+ * STRICT-JSON response can't be truncated mid-array (which would fail the parse
+ * and yield ZERO companies) when a mined list page names dozens of startups.
+ * Pair with the discovery token ceiling in the worker.
+ */
+export const MAX_NORMALIZE_COMPANIES = 30;
 
 export type DiscoveryCategory = 'news' | 'general';
 
@@ -136,18 +143,59 @@ export function parseDiscoveryQueries(text: string): DiscoveryQuery[] {
   return out;
 }
 
-export const DISCOVERY_NORMALIZE_SYSTEM_PROMPT = `You extract COMPANIES that recently raised funding (or otherwise match the search intent) from web/news search results.
+export const DISCOVERY_NORMALIZE_SYSTEM_PROMPT = `You extract operating COMPANIES that match the search intent from web/news search results AND from the full text of fetched LIST/roundup pages.
+
+You are given two kinds of input:
+- SEARCH RESULTS: a title + snippet per hit. A single-company hit yields one company.
+- LIST PAGES: the fetched body of a "top N startups" / roundup / league-table page. These ENUMERATE many companies — extract EVERY operating company named in the list, not just the page's own brand.
 
 Rules:
-- Output only operating COMPANIES that are the subject of the result. DROP venture funds, accelerators, "fund I/II/III" raises, ecosystem/roundup pieces, league tables, and any result that is not a single company raising or matching.
-- Do not invent companies not present in the results. If a result names no clear company, skip it.
-- Pull the company's own website domain when present in the snippet; otherwise leave domain null (it will be resolved later). The result URL is the news source, NOT the company domain.
+- Output operating COMPANIES only. DROP venture funds, accelerators, "fund I/II/III" raises, the publisher/aggregator running the list (e.g. the directory site itself), and anything that is not a company that could be a customer.
+- A list/roundup is a SOURCE OF COMPANIES, not noise — mine it. (Older guidance dropped roundups; do the opposite now: harvest the companies inside them.)
+- Do not invent companies not present in the input. If a result or page names no clear company, skip it.
+- Pull a company's own website domain only when the text states it; otherwise leave domain null (it will be resolved later). A result/page URL is the source, NOT the company domain.
 - Capture funding stage, USD amount, and announced date ONLY when stated; else null.
+- Return at most ${MAX_NORMALIZE_COMPANIES} companies (the strongest matches first). Deduplicate by company.
 
 Return STRICT JSON, no prose:
-{"companies":[{"name":"<string>","domain":"<string|null>","fundingStage":"<string|null>","amountUsd":<number|null>,"announcedDate":"<string|null>","sourceUrl":"<result url|null>"}]}`;
+{"companies":[{"name":"<string>","domain":"<string|null>","fundingStage":"<string|null>","amountUsd":<number|null>,"announcedDate":"<string|null>","sourceUrl":"<source url|null>"}]}`;
 
-/** Build the normalize user turn from raw search hits (title/url/snippet/age). */
+/** A fetched list/roundup page whose body we mine for the companies it names. */
+export interface DiscoveryListPage {
+  url: string;
+  title: string;
+  /** Cleaned page text (already truncated by the caller). */
+  text: string;
+}
+
+/**
+ * Heuristic: does this search hit look like a LIST/roundup of many companies
+ * (worth fetching + mining) rather than a single company's page? Pure + total.
+ * Used only to decide WHAT to fetch — the LLM still does the extraction, so a
+ * false positive just fetches a normal page (≤1 company) and a false negative
+ * just misses a list; neither corrupts output.
+ */
+export function isListShaped(hit: { title: string; description: string }): boolean {
+  const text = `${hit.title} ${hit.description}`.toLowerCase();
+  // Must name companies in the plural AND carry a "this is a list" cue. Either
+  // alone is too loose (a single-company page says "companies" generically; a
+  // number alone matches funding amounts). Both together is a strong roundup
+  // signal. False positives are cheap (we just fetch an extra page).
+  const namesMany = /\b(startups|companies|firms|brands)\b/.test(text);
+  const listCue =
+    /\b(top|best|leading|notable|promising)\b/.test(text) ||
+    /\blist of\b/.test(text) ||
+    /\b\d{2,}\+?\b/.test(text) || // "29", "505+", a year like "2026"
+    /\bto watch\b/.test(text) ||
+    /\bfastest[- ]growing\b/.test(text) ||
+    /\b(roundup|league table|directory)\b/.test(text);
+  return namesMany && listCue;
+}
+
+/**
+ * Build the normalize user turn from raw search hits (title/url/snippet/age)
+ * plus any fetched LIST pages whose body we mine for the companies they name.
+ */
 export function buildNormalizeUserPrompt(
   results: ReadonlyArray<{
     title: string;
@@ -155,6 +203,7 @@ export function buildNormalizeUserPrompt(
     description: string;
     age: string | null;
   }>,
+  listPages: ReadonlyArray<DiscoveryListPage> = [],
 ): string {
   const blocks = results.map((r, i) =>
     [
@@ -166,7 +215,18 @@ export function buildNormalizeUserPrompt(
       .filter(Boolean)
       .join('\n'),
   );
-  return `Search results:\n\n${blocks.join('\n\n')}\n\nExtract the matching companies per the rules.`;
+  const sections = [`Search results:\n\n${blocks.join('\n\n')}`];
+  if (listPages.length > 0) {
+    const pageBlocks = listPages.map((p, i) =>
+      [`[LIST ${i + 1}] ${p.title}`, `url: ${p.url}`, `page text:`, p.text].join(
+        '\n',
+      ),
+    );
+    sections.push(
+      `List pages (mine EVERY company named inside each):\n\n${pageBlocks.join('\n\n')}`,
+    );
+  }
+  return `${sections.join('\n\n')}\n\nExtract the matching companies per the rules.`;
 }
 
 /**
