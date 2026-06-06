@@ -7,10 +7,7 @@ import {
   Loader2,
   Sparkles,
 } from 'lucide-react';
-import {
-  CONTACT_SOURCING_MIN_FIT_SCORE,
-  type QualifiedProspect,
-} from '@getbeyond/shared';
+import type { QualifiedProspect } from '@getbeyond/shared';
 import { Badge } from '@/components/ui/badge';
 import { CitationChip } from '@/components/CitationChip';
 import { cn } from '@/lib/utils';
@@ -252,6 +249,14 @@ function ProspectCard({
  * connector credits on companies clearing CONTACT_SOURCING_MIN_FIT_SCORE, and
  * only on those with a domain to search) from "we looked and found none".
  */
+/**
+ * Mirror of `CONTACT_SOURCING_MIN_FIT_SCORE` in `@getbeyond/shared` (the
+ * orchestrator's Stage-5 gate). The web imports TYPES ONLY from shared (shared
+ * ships CommonJS; importing a runtime value into a client module breaks the Next
+ * build — see next.config.ts). Keep this in sync with the shared constant.
+ */
+const CONTACT_SOURCING_MIN_FIT_SCORE = 0.6;
+
 function ProspectContacts({
   prospect,
 }: {

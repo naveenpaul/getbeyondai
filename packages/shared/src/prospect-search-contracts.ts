@@ -149,6 +149,11 @@ export interface ProspectContact {
  * by the orchestrator (which enforces it) and the UI (which explains, on a
  * prospect with no contacts, whether it was below this bar vs. genuinely had
  * none found). Keep these in lockstep — see CONTACT_SOURCING_DEFAULTS.minFitScore.
+ *
+ * NOTE: the web app imports TYPES ONLY from this package (shared ships CommonJS;
+ * a runtime-value import breaks the Next build — see apps/web/next.config.ts), so
+ * the web mirrors this value locally in ProspectSearchTranscript.tsx. Keep that
+ * mirror in sync until shared ships a dual ESM build.
  */
 export const CONTACT_SOURCING_MIN_FIT_SCORE = 0.6;
 
