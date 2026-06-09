@@ -54,6 +54,66 @@ describe('Crawl4aiProvider — requests', () => {
     });
   });
 
+  it('attaches a BM25 content filter carrying the query when one is given', async () => {
+    const httpFetch = vi.fn(
+      async (_url: string | URL | Request, _init?: RequestInit) =>
+        jsonResponse({ results: [{ success: true, markdown: { fit_markdown: 'x' } }] }),
+    );
+    const provider = new Crawl4aiProvider({
+      baseUrl: 'http://crawl4ai:11235',
+      httpFetch,
+    });
+    await provider.fetch('https://list.com/top', {
+      query: 'funded IT startups in Bengaluru',
+    });
+    const body = JSON.parse(httpFetch.mock.calls[0]?.[1]?.body as string);
+    expect(body.urls).toEqual(['https://list.com/top']);
+    const filter =
+      body.crawler_config?.params?.markdown_generator?.params?.content_filter;
+    expect(filter?.type).toBe('BM25ContentFilter');
+    expect(filter?.params?.user_query).toBe('funded IT startups in Bengaluru');
+  });
+
+  it('sends a plain body (no filter) when no query is given', async () => {
+    const httpFetch = vi.fn(
+      async (_url: string | URL | Request, _init?: RequestInit) =>
+        jsonResponse({ results: [{ success: true, markdown: 'x' }] }),
+    );
+    await new Crawl4aiProvider({ baseUrl: 'http://c:1', httpFetch }).fetch(
+      'https://x.example',
+    );
+    expect(JSON.parse(httpFetch.mock.calls[0]?.[1]?.body as string)).toEqual({
+      urls: ['https://x.example'],
+    });
+  });
+
+  it('retries WITHOUT the filter when the server rejects the BM25 config', async () => {
+    // First call (with filter) 422s; second (plain) succeeds → page not lost.
+    const httpFetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ detail: 'bad config' }, { status: 422 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ results: [{ success: true, markdown: 'recovered' }] }),
+      );
+    const provider = new Crawl4aiProvider({ baseUrl: 'http://c:1', httpFetch });
+    const result = await provider.fetch('https://list.com/top', { query: 'q' });
+    expect(result.text).toBe('recovered');
+    expect(httpFetch).toHaveBeenCalledTimes(2);
+    // First body carried the filter; the retry body did not.
+    expect(JSON.parse(httpFetch.mock.calls[0]?.[1]?.body as string).crawler_config).toBeDefined();
+    expect(JSON.parse(httpFetch.mock.calls[1]?.[1]?.body as string).crawler_config).toBeUndefined();
+  });
+
+  it('does not retry a filter-less (no-query) failure', async () => {
+    const httpFetch = vi.fn(async () =>
+      jsonResponse({ detail: 'boom' }, { status: 500 }),
+    );
+    await expect(
+      new Crawl4aiProvider({ baseUrl: 'http://c:1', httpFetch }).fetch('https://x.example'),
+    ).rejects.toThrow(ContentProviderError);
+    expect(httpFetch).toHaveBeenCalledTimes(1);
+  });
+
   it('sends a bearer Authorization header when a token is configured', async () => {
     const httpFetch = vi.fn(
       async (_url: string | URL | Request, _init?: RequestInit) =>

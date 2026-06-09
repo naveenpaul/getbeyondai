@@ -14,9 +14,12 @@ import { Crawl4aiProvider } from './providers/crawl4ai.provider';
  * `ContentProvider`. Adding a provider = adding a case here + its class; the
  * `never` exhaustiveness check makes a forgotten case a compile error.
  *
- * `local` is the default everywhere — it needs no extra service, so a
- * self-hoster gets working research out of the box. `crawl4ai` is the opt-in
- * upgrade and requires `CRAWL4AI_URL` to point at the sidecar.
+ * Default resolution (mirrors the search registry's `SEARXNG_URL` inference):
+ * an explicit `CONTENT_PROVIDER` wins; else if `CRAWL4AI_URL` is set we assume
+ * the sidecar is running and use `crawl4ai`; else `local`. `./dev.sh` starts the
+ * crawl4ai sidecar and exports `CRAWL4AI_URL`, so dev gets browser-rendered
+ * extraction with no `.env` edit — while a plain `docker compose up` self-host
+ * (no `CRAWL4AI_URL`) stays on the zero-dependency `local` extractor.
  */
 
 export interface ContentProviderConfig {
@@ -68,16 +71,19 @@ export function resolveContentProviderConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): ContentProviderConfig {
   const raw = env.CONTENT_PROVIDER?.trim().toLowerCase();
-  // Empty / unset → the safe default. A non-empty unknown value is surfaced as
-  // a clear error at construction rather than silently falling back, so a
-  // misconfigured self-host fails loudly instead of quietly using the wrong
-  // extractor.
-  const name = (raw ? raw : 'local') as ContentProviderName;
+  const crawl4aiUrl = env.CRAWL4AI_URL?.trim() || undefined;
+  // Explicit CONTENT_PROVIDER wins; else infer crawl4ai when its sidecar URL is
+  // wired (dev.sh exports it on a healthy start); else the zero-dependency local
+  // extractor. A non-empty unknown CONTENT_PROVIDER surfaces as a clear error at
+  // construction rather than silently falling back.
+  const name = (
+    raw ? raw : crawl4aiUrl ? 'crawl4ai' : 'local'
+  ) as ContentProviderName;
   return {
     name,
     jinaUrl: env.JINA_READER_URL?.trim() || undefined,
     jinaToken: env.JINA_API_KEY?.trim() || undefined,
-    crawl4aiUrl: env.CRAWL4AI_URL?.trim() || undefined,
+    crawl4aiUrl,
     crawl4aiToken: env.CRAWL4AI_API_TOKEN?.trim() || undefined,
   };
 }

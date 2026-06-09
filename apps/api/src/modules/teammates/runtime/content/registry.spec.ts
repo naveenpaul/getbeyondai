@@ -71,6 +71,23 @@ describe('resolveContentProviderConfig', () => {
     );
   });
 
+  it('infers crawl4ai when CRAWL4AI_URL is set but no explicit provider', () => {
+    const cfg = resolveContentProviderConfig({
+      CRAWL4AI_URL: 'http://localhost:11235',
+    });
+    expect(cfg.name).toBe('crawl4ai');
+    expect(cfg.crawl4aiUrl).toBe('http://localhost:11235');
+  });
+
+  it('an explicit CONTENT_PROVIDER still overrides the CRAWL4AI_URL inference', () => {
+    expect(
+      resolveContentProviderConfig({
+        CONTENT_PROVIDER: 'local',
+        CRAWL4AI_URL: 'http://localhost:11235',
+      }).name,
+    ).toBe('local');
+  });
+
   it('reads crawl4ai + url + token, lowercasing the name', () => {
     expect(
       resolveContentProviderConfig({

@@ -64,12 +64,19 @@ export class SearxngSearchProvider implements SearchProvider {
 
   async search(
     query: string,
-    opts?: { count?: number },
+    opts?: { count?: number; categories?: readonly string[] },
   ): Promise<SearchOutput> {
     const count = opts?.count ?? 10;
     const url = new URL(`${this.baseUrl}/search`);
     url.searchParams.set('q', query);
     url.searchParams.set('format', 'json');
+    // SearXNG takes a comma-separated category list and merges results across
+    // them in ONE request — e.g. 'general,news' returns both the population
+    // listicles AND fresh single-company funding events together.
+    const categories = opts?.categories?.filter((c) => c.trim().length > 0);
+    if (categories && categories.length > 0) {
+      url.searchParams.set('categories', categories.join(','));
+    }
 
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (this.authToken) headers.Authorization = `Bearer ${this.authToken}`;

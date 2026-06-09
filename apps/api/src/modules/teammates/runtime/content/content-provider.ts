@@ -47,11 +47,14 @@ export interface ContentProvider {
   /** Stable provider id ('local' | 'crawl4ai') — surfaced in errors/audit. */
   readonly name: string;
   /**
-   * Fetch `url` and return its cleaned content. Throws `ContentProviderError`
-   * on transport/extraction failure; the `fetch_url` tool lets that propagate
-   * so the tool-use loop reports it to the model via `is_error: true`.
+   * Fetch `url` and return its cleaned content. An optional `query` lets a
+   * provider that supports relevance filtering (e.g. Crawl4AI's BM25 fit-
+   * markdown) trim the page to the part matching the search intent; providers
+   * without that notion ignore it. Throws `ContentProviderError` on
+   * transport/extraction failure; the `fetch_url` tool lets that propagate so
+   * the tool-use loop reports it to the model via `is_error: true`.
    */
-  fetch(url: string): Promise<FetchedContent>;
+  fetch(url: string, opts?: { query?: string }): Promise<FetchedContent>;
 }
 
 /** Names the registry switches on. Keep in sync with the registry's cases. */

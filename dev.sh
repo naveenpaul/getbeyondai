@@ -4,7 +4,8 @@
 #
 # What it does (idempotent — safe to re-run):
 #   1. Check Docker is running and the postgres + minio containers are up, and
-#      start the SearXNG sidecar (keyless web search for the Researcher).
+#      start the SearXNG (keyless web search) + Crawl4AI (keyless browser
+#      extractor) sidecars, exporting their URLs so the registries auto-resolve.
 #   2. Check apps/api/.env exists with a non-empty ANTHROPIC_API_KEY, and that
 #      web search is wired (the SearXNG sidecar is running).
 #   3. Check apps/web/.env.local exists.
@@ -110,6 +111,27 @@ if searxng_healthy; then
   ok "SearXNG running ($SEARXNG_URL) — web_search will use it"
 else
   warn "SearXNG not healthy — web search is unavailable until it starts (no key-based fallback)."
+fi
+
+# Crawl4AI — keyless browser-rendered extractor (URL → clean, query-focused
+# markdown) for fetch_url + discovery list-page mining. Same pattern as SearXNG:
+# start the sidecar, and if healthy export CRAWL4AI_URL so the content registry
+# resolves `crawl4ai` (no .env edit). Heavier than SearXNG (a ~1 GB Chromium
+# container) + a longer first boot, so it's best-effort: if it can't come up,
+# the content registry falls back to the zero-dependency `local` extractor.
+crawl4ai_healthy() { curl -sf -o /dev/null --max-time 2 http://localhost:11235/health 2>/dev/null; }
+if ! crawl4ai_healthy; then
+  dim "Starting Crawl4AI (keyless browser extractor)…"
+  docker compose --profile crawl4ai up -d crawl4ai >/dev/null 2>&1 \
+    || warn "Couldn't start Crawl4AI — extraction will use the local fallback."
+  # Browser container: allow a longer boot than SearXNG (first run also pulls the image).
+  for _ in $(seq 1 30); do crawl4ai_healthy && break; sleep 2; done
+fi
+if crawl4ai_healthy; then
+  export CRAWL4AI_URL="${CRAWL4AI_URL:-http://localhost:11235}"
+  ok "Crawl4AI running ($CRAWL4AI_URL) — extraction will use it"
+else
+  warn "Crawl4AI not healthy — extraction falls back to the local regex extractor."
 fi
 
 # ─── 2. Env files ─────────────────────────────────────────────────────────

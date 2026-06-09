@@ -38,12 +38,17 @@ export interface SearchProvider {
   /** Stable provider id ('searxng') — surfaced in errors/audit. */
   readonly name: string;
   /**
-   * Run a web search and return up to ~`count` results. Throws
-   * `SearchProviderError` on transport/engine failure; the `web_search` tool
-   * lets it propagate so the tool-use loop reports it to the model via
-   * `is_error: true` (the model can then retry or abstain).
+   * Run a web search and return up to ~`count` results. `categories` narrows the
+   * engines the backend consults (e.g. `['general','news']`); a provider with no
+   * notion of categories ignores it. Throws `SearchProviderError` on
+   * transport/engine failure; the `web_search` tool lets it propagate so the
+   * tool-use loop reports it to the model via `is_error: true` (the model can
+   * then retry or abstain).
    */
-  search(query: string, opts?: { count?: number }): Promise<SearchOutput>;
+  search(
+    query: string,
+    opts?: { count?: number; categories?: readonly string[] },
+  ): Promise<SearchOutput>;
 }
 
 /** Names the registry switches on. Keep in sync with the registry's cases.

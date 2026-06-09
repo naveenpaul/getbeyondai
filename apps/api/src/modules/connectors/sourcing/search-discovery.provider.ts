@@ -59,10 +59,19 @@ const DEFAULT_LIMIT = 25;
 const MAX_LIST_FETCHES = 4;
 /** Per-page text cap fed to normalize (keeps the prompt + output bounded). */
 const LIST_PAGE_CHAR_CAP = 4000;
+/**
+ * Categories every discovery query requests. SearXNG merges them in one call,
+ * so we get BOTH the population listicles (`general`) AND fresh single-company
+ * funding events (`news`) without a per-query router or a second request.
+ */
+const DISCOVERY_CATEGORIES = ['general', 'news'] as const;
 
 /** Minimal web-search edge (a `SearchProvider`, narrowed for injection). */
 export interface DiscoverySearcher {
-  search(query: string, opts?: { count?: number }): Promise<SearchOutput>;
+  search(
+    query: string,
+    opts?: { count?: number; categories?: readonly string[] },
+  ): Promise<SearchOutput>;
 }
 
 /** Single-shot LLM text completion edge (STRICT-JSON in/out). */
@@ -155,7 +164,10 @@ export class SearchDiscoverySourcingProvider implements SourcingProvider {
     const byUrl = new Map<string, SearchOutput['results'][number]>();
     for (const q of queries) {
       try {
-        const out = await this.deps.searcher.search(q.q, { count: perQuery });
+        const out = await this.deps.searcher.search(q.q, {
+          count: perQuery,
+          categories: DISCOVERY_CATEGORIES,
+        });
         for (const r of out.results) {
           if (r.url && !byUrl.has(r.url)) byUrl.set(r.url, r);
         }
@@ -272,6 +284,37 @@ export class SearchDiscoverySourcingProvider implements SourcingProvider {
       out.push(toCandidate(c, domain));
     }
     return out;
+  }
+}
+
+/**
+ * Parse a recency window (in months) out of a free-text goal, for the recency
+ * filter + query bias. Pure + total. Handles "last/past/within/recent N
+ * months|weeks|years|quarters" and bare "last quarter". Weeks round up to a
+ * month (the filter is a coarse staleness guard, not a precise cutoff). Returns
+ * null when the goal states no window — caller then applies no hard filter.
+ */
+export function parseRecencyMonths(goal: string): number | null {
+  const text = goal.toLowerCase();
+  // "last quarter" / "past quarter" with no number → 3 months.
+  if (/\b(last|past|previous|this)\s+quarter\b/.test(text)) return 3;
+  const m = text.match(
+    /\b(?:last|past|within|in the|previous|recent)\s+(\d{1,2})\s+(week|month|quarter|year)s?\b/,
+  );
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  switch (m[2]) {
+    case 'week':
+      return Math.max(1, Math.ceil(n / 4));
+    case 'month':
+      return n;
+    case 'quarter':
+      return n * 3;
+    case 'year':
+      return n * 12;
+    default:
+      return null;
   }
 }
 

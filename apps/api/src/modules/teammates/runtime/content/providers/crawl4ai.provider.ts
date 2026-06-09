@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import {
   ContentProviderError,
   type ContentProvider,
@@ -63,6 +64,7 @@ interface Crawl4aiResponse {
 export class Crawl4aiProvider implements ContentProvider {
   readonly name = PROVIDER_NAME;
 
+  private readonly logger = new Logger(Crawl4aiProvider.name);
   private readonly baseUrl: string;
   private readonly apiToken?: string;
   private readonly httpFetch: typeof fetch;
@@ -84,8 +86,27 @@ export class Crawl4aiProvider implements ContentProvider {
     this.timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
-  async fetch(url: string): Promise<FetchedContent> {
-    const result = await this.callCrawl(url);
+  async fetch(
+    url: string,
+    opts?: { query?: string },
+  ): Promise<FetchedContent> {
+    const query = opts?.query?.trim() || undefined;
+    let result: Crawl4aiCrawlResult;
+    try {
+      result = await this.callCrawl(url, query);
+    } catch (err) {
+      // The BM25 filter config is version-sensitive (Crawl4AI's `{type,params}`
+      // envelope changes across releases). If the server rejects it (e.g. a 422
+      // validation error), retry once WITHOUT the filter so we still get the
+      // default fit_markdown rather than losing the page entirely. A genuine
+      // page failure (success:false) returns normally from callCrawl and is
+      // handled below — it never reaches this retry.
+      if (!query || !(err instanceof ContentProviderError)) throw err;
+      this.logger.warn(
+        `BM25-focused crawl rejected for ${url}; retrying without the filter`,
+      );
+      result = await this.callCrawl(url);
+    }
 
     if (result.success === false) {
       throw new ContentProviderError(
@@ -112,7 +133,10 @@ export class Crawl4aiProvider implements ContentProvider {
     };
   }
 
-  private async callCrawl(url: string): Promise<Crawl4aiCrawlResult> {
+  private async callCrawl(
+    url: string,
+    query?: string,
+  ): Promise<Crawl4aiCrawlResult> {
     // AbortController bounds slow browser renders so one stuck page can't
     // hang the whole AgentRun past its budget.
     const controller = new AbortController();
@@ -129,7 +153,7 @@ export class Crawl4aiProvider implements ContentProvider {
             ? { Authorization: `Bearer ${this.apiToken}` }
             : {}),
         },
-        body: JSON.stringify({ urls: [url] }),
+        body: JSON.stringify(buildCrawlBody(url, query)),
         signal: controller.signal,
       });
     } catch (err) {
@@ -177,6 +201,42 @@ export class Crawl4aiProvider implements ContentProvider {
     }
     return result;
   }
+}
+
+/**
+ * Build the `/crawl` request body. Plain `{ urls: [url] }` by default (Crawl4AI
+ * applies its default pruning fit_markdown). When `query` is given, attach a
+ * BM25 content filter so the returned `fit_markdown` is trimmed to the part of
+ * the page matching the search intent — e.g. a mined "Top N startups" listicle
+ * keeps the company list and drops nav/ads/unrelated sections.
+ *
+ * NOTE: Crawl4AI's REST config uses a nested `{type, params}` envelope whose
+ * exact shape is version-sensitive. `fetch()` retries without this filter if the
+ * server rejects it, so a version skew degrades to default fit_markdown rather
+ * than failing the page.
+ */
+export function buildCrawlBody(
+  url: string,
+  query?: string,
+): Record<string, unknown> {
+  if (!query) return { urls: [url] };
+  return {
+    urls: [url],
+    crawler_config: {
+      type: 'CrawlerRunConfig',
+      params: {
+        markdown_generator: {
+          type: 'DefaultMarkdownGenerator',
+          params: {
+            content_filter: {
+              type: 'BM25ContentFilter',
+              params: { user_query: query },
+            },
+          },
+        },
+      },
+    },
+  };
 }
 
 /**

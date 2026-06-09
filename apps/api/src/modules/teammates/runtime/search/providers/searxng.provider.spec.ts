@@ -49,6 +49,22 @@ describe('SearxngSearchProvider', () => {
     expect(url.searchParams.get('format')).toBe('json');
   });
 
+  it('forwards categories as a comma-separated param, omits it when absent', async () => {
+    const httpFetch = fetchReturning(() => jsonResponse({ results: [] }));
+    await new SearxngSearchProvider({ baseUrl: BASE, httpFetch }).search('x', {
+      categories: ['general', 'news'],
+    });
+    expect(new URL(String(httpFetch.mock.calls[0]?.[0])).searchParams.get('categories')).toBe(
+      'general,news',
+    );
+
+    const httpFetch2 = fetchReturning(() => jsonResponse({ results: [] }));
+    await new SearxngSearchProvider({ baseUrl: BASE, httpFetch: httpFetch2 }).search('x');
+    expect(
+      new URL(String(httpFetch2.mock.calls[0]?.[0])).searchParams.get('categories'),
+    ).toBeNull();
+  });
+
   it('honors count by slicing results', async () => {
     const httpFetch = fetchReturning(() =>
       jsonResponse({

@@ -47,12 +47,14 @@ services:
       exit 0
       "
 
-  # Opt-in content extractor for fetch_url (CONTENT_PROVIDER=crawl4ai).
-  # Behind the `crawl4ai` profile so the default `docker compose up` does NOT
-  # pull this ~1GB Chromium image — start it explicitly when you want
-  # browser-rendered markdown instead of the zero-dependency local extractor:
+  # Keyless browser-rendered content extractor for fetch_url + discovery list-
+  # page mining. Behind the `crawl4ai` profile so a plain `docker compose up`
+  # does NOT pull this ~1GB Chromium image — the zero-dependency `local`
+  # extractor stays the no-sidecar default. `./dev.sh` starts it and exports
+  # CRAWL4AI_URL, so the content registry auto-resolves `crawl4ai` with no .env
+  # edit (just like SearXNG). To run it by hand:
   #   docker compose --profile crawl4ai up -d crawl4ai
-  # Then set in the API env: CONTENT_PROVIDER=crawl4ai, CRAWL4AI_URL=http://localhost:11235
+  # then export CRAWL4AI_URL=http://localhost:11235 (the registry infers the rest).
   crawl4ai:
     image: unclecode/crawl4ai:0.7.7 # pin the tag — never :latest in a shipped product
     profiles: ["crawl4ai"]

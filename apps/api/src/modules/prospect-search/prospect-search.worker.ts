@@ -65,7 +65,10 @@ import {
 import { callModel } from '../teammates/runtime/call-model';
 import { searchProviderFromEnv } from '../teammates/runtime/search/registry';
 import { contentProviderFromEnv } from '../teammates/runtime/content/registry';
-import { SearchDiscoverySourcingProvider } from '../connectors/sourcing/search-discovery.provider';
+import {
+  SearchDiscoverySourcingProvider,
+  parseRecencyMonths,
+} from '../connectors/sourcing/search-discovery.provider';
 import { resolveDomainViaSearch } from '../connectors/sourcing/domain-resolver';
 import type { WinKey } from '../connectors/sourcing/exclude-wins';
 import type { ConnectorKind } from '@getbeyond/shared';
@@ -206,9 +209,12 @@ export class ProspectSearchWorker implements OnModuleInit {
               chat: discoveryChat,
               // Mine list/roundup pages for the companies they name (the answer
               // to "top startups in X" is in the page body, not the snippet).
+              // Pass the goal as the relevance query so a BM25-capable provider
+              // (Crawl4AI fit-markdown) trims the page to the matching list and
+              // drops nav/ads — sharper input for normalize.
               fetchPage: async (url: string) => {
                 try {
-                  return (await content.fetch(url)).text;
+                  return (await content.fetch(url, { query: data.goal })).text;
                 } catch {
                   return null;
                 }
@@ -218,6 +224,10 @@ export class ProspectSearchWorker implements OnModuleInit {
               // enrichment backfills it; dropping pre-qualify lost most list-
               // mined companies (their domain rarely appears in list text).
               dropDomainless: false,
+              // Enforce "last N months" from the goal: dated (news) candidates
+              // older than the window are dropped; undated ones (most listicle
+              // companies) are kept for recall. null when the goal states none.
+              withinMonths: parseRecencyMonths(data.goal),
               winNames: winKeys.map((w) => w.name),
               winKeys,
               intent: data.goal,

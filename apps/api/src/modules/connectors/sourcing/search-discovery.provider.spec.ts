@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   SearchDiscoverySourcingProvider,
   filterByRecency,
+  parseRecencyMonths,
   type SearchDiscoveryDeps,
 } from './search-discovery.provider';
 import {
@@ -60,6 +61,18 @@ describe('SearchDiscoverySourcingProvider.findCandidates', () => {
     expect(res.candidates[0]!.domain).toBe('propsoch.com');
     // funding signal carried in raw for the Researcher.
     expect(res.candidates[0]!.raw['source']).toBe('search-discovery');
+  });
+
+  it('requests both general + news categories in one search call', async () => {
+    const searcher = searcherReturning([
+      { title: 'Propsoch raises $2M', url: 'https://n.com/a', description: 'seed', age: null },
+    ]);
+    const p = new SearchDiscoverySourcingProvider(deps({ searcher }));
+    await p.findCandidates(ICP);
+    expect(searcher.search).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ categories: ['general', 'news'] }),
+    );
   });
 
   it('returns empty (no throw) when the query builder yields no queries', async () => {
@@ -250,5 +263,22 @@ describe('filterByRecency', () => {
   it('no-ops when withinMonths is null or <= 0', () => {
     expect(filterByRecency([make('2020-01-01')], null, now)).toHaveLength(1);
     expect(filterByRecency([make('2020-01-01')], 0, now)).toHaveLength(1);
+  });
+});
+
+describe('parseRecencyMonths', () => {
+  it('parses month / quarter / year / week windows', () => {
+    expect(parseRecencyMonths('funded in the last 3 months')).toBe(3);
+    expect(parseRecencyMonths('raised in the past 6 months')).toBe(6);
+    expect(parseRecencyMonths('within 2 quarters')).toBe(6);
+    expect(parseRecencyMonths('in the last 1 year')).toBe(12);
+    expect(parseRecencyMonths('last 6 weeks')).toBe(2); // ceil(6/4)
+    expect(parseRecencyMonths('startups funded last quarter')).toBe(3);
+  });
+
+  it('returns null when the goal states no window', () => {
+    expect(parseRecencyMonths('find IT startups in Bengaluru')).toBeNull();
+    expect(parseRecencyMonths('recently funded startups')).toBeNull(); // no number
+    expect(parseRecencyMonths('')).toBeNull();
   });
 });
